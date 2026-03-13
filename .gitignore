@@ -1,0 +1,33 @@
+# Build
+build/
+cmake-build-*/
+out/
+*.obj
+*.o
+*.exe
+*.dll
+*.dylib
+*.so
+*.so.*
+*.lib
+*.a
+
+# IDE
+.vs/
+.vscode/
+*.swp
+*.swo
+*~
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies (downloaded at build time)
+include/miniaudio.h
+genai_extracted/
+
+# Models (large files)
+models/
+*.onnx

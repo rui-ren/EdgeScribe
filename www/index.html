@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EDGESCRIBE</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="app">
+  <!-- ══ Sidebar ══ -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h1>🩺 EDGESCRIBE</h1>
+      <div class="subtitle">On-device AI assistant</div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a class="nav-item active" data-page="dashboard">
+        <span class="icon">📊</span>
+        <span>Dashboard</span>
+      </a>
+
+      <div class="nav-section">Speech</div>
+      <a class="nav-item" data-page="live">
+        <span class="icon">🎤</span>
+        <span>Live Transcription</span>
+      </a>
+      <a class="nav-item" data-page="file">
+        <span class="icon">📁</span>
+        <span>File Transcription</span>
+      </a>
+
+      <div class="nav-section">Intelligence</div>
+      <a class="nav-item" data-page="chat">
+        <span class="icon">💬</span>
+        <span>Chat</span>
+      </a>
+      <a class="nav-item" data-page="vision">
+        <span class="icon">🖼️</span>
+        <span>Vision &amp; OCR</span>
+      </a>
+
+      <div class="nav-section">Output</div>
+      <a class="nav-item" data-page="tts">
+        <span class="icon">🔊</span>
+        <span>Text-to-Speech</span>
+      </a>
+
+      <div class="nav-section">System</div>
+      <a class="nav-item" data-page="settings">
+        <span class="icon">⚙️</span>
+        <span>Settings</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="engine-status">
+        <span class="status-label"><span class="status-dot" id="status-asr"></span> ASR</span>
+        <span class="status-label"><span class="status-dot" id="status-llm"></span> LLM</span>
+        <span class="status-label"><span class="status-dot" id="status-vision"></span> VLM</span>
+        <span class="status-label"><span class="status-dot" id="status-tts"></span> TTS</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ══ Main Content ══ -->
+  <main class="main">
+
+    <!-- ── Dashboard ── -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <h2>Dashboard</h2>
+        <span class="desc">EDGESCRIBE v0.1.0</span>
+      </div>
+      <div class="page-body">
+        <div class="card-grid">
+          <div class="stat-card" id="card-asr" data-page="live">
+            <div class="icon">🎤</div>
+            <div class="label">Speech-to-Text</div>
+            <div class="status">Checking...</div>
+          </div>
+          <div class="stat-card" id="card-llm" data-page="chat">
+            <div class="icon">🧠</div>
+            <div class="label">Chat / LLM</div>
+            <div class="status">Checking...</div>
+          </div>
+          <div class="stat-card" id="card-vision" data-page="vision">
+            <div class="icon">🖼️</div>
+            <div class="label">Vision &amp; OCR</div>
+            <div class="status">Checking...</div>
+          </div>
+          <div class="stat-card" id="card-tts" data-page="tts">
+            <div class="icon">🔊</div>
+            <div class="label">Text-to-Speech</div>
+            <div class="status">Checking...</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 24px;">
+          <h3 style="margin-bottom: 12px;">Quick Actions</h3>
+          <div class="btn-group">
+            <button class="btn btn-primary btn-lg" onclick="window.app.navigate('live')">🎤 Start Recording</button>
+            <button class="btn btn-lg" onclick="window.app.navigate('file')">📁 Transcribe File</button>
+            <button class="btn btn-lg" onclick="window.app.navigate('chat')">💬 Chat</button>
+            <button class="btn btn-lg" onclick="window.app.navigate('vision')">🖼️ Analyze Image</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 16px;">
+          <h3 style="margin-bottom: 8px;">About</h3>
+          <p style="color: var(--text-secondary); font-size: 14px; line-height: 1.6;">
+            EDGESCRIBE is a fully open-source, on-device AI assistant for speech, vision, and language.
+            All processing happens locally — no data leaves your machine. Built for privacy-first
+            use cases like HIPAA-compliant medical transcription.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Live Transcription ── -->
+    <div class="page" id="page-live">
+      <div class="page-header">
+        <h2>🎤 Live Transcription</h2>
+        <span class="desc">Real-time speech-to-text from your microphone</span>
+      </div>
+      <div class="page-body" style="display: flex; flex-direction: column; gap: 16px;">
+
+        <div style="display: flex; align-items: center; gap: 24px;">
+          <button class="record-btn" id="record-btn" title="Click to start/stop recording">
+            <div class="inner"></div>
+          </button>
+          <div>
+            <div style="font-size: 18px; font-weight: 600;" id="live-status-text">Ready to record</div>
+            <div class="recording-stats">
+              <span class="stat">⏱ <span id="live-duration">0:00</span></span>
+              <span class="stat">📦 <span id="live-chunks">0</span> chunks</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="transcript-area" id="live-transcript" style="flex: 1;">
+          <span class="placeholder">Click the red button to start recording...</span>
+        </div>
+
+        <div class="btn-group">
+          <button class="btn" id="live-copy">📋 Copy</button>
+          <button class="btn" id="live-save">💾 Save .txt</button>
+          <button class="btn" id="live-soap">📝 SOAP Notes</button>
+          <button class="btn" id="live-clear">🗑 Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── File Transcription ── -->
+    <div class="page" id="page-file">
+      <div class="page-header">
+        <h2>📁 File Transcription</h2>
+        <span class="desc">Upload an audio file to transcribe</span>
+      </div>
+      <div class="page-body" style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="drop-zone" id="file-drop-zone">
+          <div class="icon">📂</div>
+          <div class="title">Drop audio file here or click to browse</div>
+          <div class="subtitle">Supports WAV, MP3, FLAC</div>
+        </div>
+        <input type="file" id="file-input" accept="audio/*" style="display: none;">
+
+        <div class="progress-bar" id="file-progress" style="display: none;">
+          <div class="fill"></div>
+        </div>
+
+        <div class="transcript-area" id="file-result" style="flex: 1;">
+          <span class="placeholder">Transcript will appear here...</span>
+        </div>
+
+        <div class="btn-group">
+          <button class="btn" id="file-copy">📋 Copy</button>
+          <button class="btn" id="file-save">💾 Save .txt</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Chat ── -->
+    <div class="page" id="page-chat">
+      <div class="page-header">
+        <h2>💬 Chat</h2>
+        <span class="desc">Chat with the local language model</span>
+      </div>
+      <div class="chat-container">
+        <div class="chat-messages" id="chat-messages">
+          <div class="message">
+            <div class="message-avatar assistant">🤖</div>
+            <div class="message-content">Hello! I'm your local AI assistant. How can I help you today?
+
+I can help with:
+• Medical questions and terminology
+• Generating SOAP notes from transcripts
+• Summarizing documents
+• General knowledge questions
+
+All processing happens on your device — nothing is sent to the cloud.</div>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <div class="chat-input-wrapper">
+            <textarea class="chat-input" id="chat-input" placeholder="Type your message... (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+            <button class="btn btn-primary btn-icon" id="chat-send" title="Send">➤</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Vision & OCR ── -->
+    <div class="page" id="page-vision">
+      <div class="page-header">
+        <h2>🖼️ Vision &amp; OCR</h2>
+        <span class="desc">Analyze images and extract text</span>
+      </div>
+      <div class="page-body">
+        <div class="vision-layout">
+          <div>
+            <div class="card">
+              <h3 style="margin-bottom: 12px;">Image</h3>
+              <img class="image-preview" id="vision-image-preview" style="display: none; width: 100%; margin-bottom: 12px;">
+              <input type="file" id="vision-image-input" accept="image/*" style="display: none;">
+              <button class="btn" id="vision-upload-btn">📂 Upload Image</button>
+            </div>
+
+            <div class="card">
+              <h3 style="margin-bottom: 8px;">Prompt</h3>
+              <textarea class="textarea" id="vision-prompt" placeholder="Describe what you want to know about the image...">Describe this image in detail.</textarea>
+            </div>
+
+            <div class="btn-group" style="margin-top: 12px;">
+              <button class="btn btn-primary" id="vision-analyze">🔍 Analyze</button>
+              <button class="btn" id="vision-ocr">📄 OCR</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="card" style="min-height: 300px;">
+              <h3 style="margin-bottom: 12px;">Result</h3>
+              <div id="vision-result" style="font-size: 14px; line-height: 1.7; white-space: pre-wrap;">
+                <span class="placeholder">Upload an image and click Analyze or OCR...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TTS ── -->
+    <div class="page" id="page-tts">
+      <div class="page-header">
+        <h2>🔊 Text-to-Speech</h2>
+        <span class="desc">Convert text to natural speech</span>
+      </div>
+      <div class="page-body">
+        <div class="card">
+          <h3 style="margin-bottom: 12px;">Text</h3>
+          <textarea class="textarea" id="tts-text" rows="6" placeholder="Enter text to speak...">The patient presents with acute bronchitis and has been prescribed a course of antibiotics.</textarea>
+        </div>
+
+        <div class="btn-group" style="margin-top: 16px;">
+          <button class="btn btn-primary btn-lg" id="tts-play">▶ Play</button>
+          <button class="btn btn-lg" id="tts-save">💾 Save WAV</button>
+        </div>
+
+        <audio class="audio-player" id="tts-audio" controls style="display: none; margin-top: 16px;"></audio>
+      </div>
+    </div>
+
+    <!-- ── Settings ── -->
+    <div class="page" id="page-settings">
+      <div class="page-header">
+        <h2>⚙️ Settings</h2>
+        <span class="desc">Models and configuration</span>
+      </div>
+      <div class="page-body">
+        <div class="card">
+          <h3 style="margin-bottom: 16px;">Models</h3>
+          <table class="model-table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>nemotron</td>
+                <td>ASR</td>
+                <td>~670 MB</td>
+                <td id="model-status-asr">Checking...</td>
+              </tr>
+              <tr>
+                <td>qwen3-vl</td>
+                <td>VLM/LLM</td>
+                <td>~1.5 GB</td>
+                <td id="model-status-vlm">Checking...</td>
+              </tr>
+              <tr>
+                <td>kokoro</td>
+                <td>TTS</td>
+                <td>~300 MB</td>
+                <td id="model-status-tts">Checking...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h3 style="margin-bottom: 12px;">About</h3>
+          <p style="color: var(--text-secondary); font-size: 14px; line-height: 1.6;">
+            <strong>EDGESCRIBE v0.1.0</strong><br>
+            Fully open-source, on-device AI assistant.<br>
+            MIT License — <a href="https://github.com/EDGESCRIBE/EDGESCRIBE" style="color: var(--accent);">GitHub</a>
+          </p>
+          <p style="color: var(--text-muted); font-size: 12px; margin-top: 8px;">
+            All processing happens locally. Zero telemetry. Zero cloud. HIPAA-friendly.
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script type="module">
+  import * as app from './js/app.js';
+  window.app = app;
+</script>
+
+</body>
+</html>
