@@ -9,6 +9,7 @@ on:
 
 env:
   GENAI_VERSION: "0.12.0"
+  LLAMA_CPP_VERSION: "b5200"
 
 jobs:
   build:
@@ -18,20 +19,14 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-            genai_pkg: "microsoft.ml.onnxruntimegenai"
             ext: zip
+            llama_vulkan: "ON"
+            llama_metal: "OFF"
           - os: macos-14
             rid: osx-arm64
-            genai_pkg: "microsoft.ml.onnxruntimegenai"
             ext: tar.gz
-          - os: macos-13
-            rid: osx-x64
-            genai_pkg: "microsoft.ml.onnxruntimegenai"
-            ext: tar.gz
-          - os: ubuntu-22.04
-            rid: linux-x64
-            genai_pkg: "microsoft.ml.onnxruntimegenai"
-            ext: tar.gz
+            llama_vulkan: "OFF"
+            llama_metal: "ON"
 
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.rid }})
@@ -43,6 +38,56 @@ jobs:
         run: |
           curl -sL -o include/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h
 
+      # ── Build llama.cpp from source ──────────────────────────────────────
+      - name: Clone llama.cpp
+        run: |
+          git clone --depth 1 --branch ${{ env.LLAMA_CPP_VERSION }} https://github.com/ggerganov/llama.cpp.git llama_cpp_src
+
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows' && matrix.llama_vulkan == 'ON'
+        shell: pwsh
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
+          Invoke-WebRequest -Uri $url -OutFile vulkan-sdk.exe
+          Start-Process -FilePath .\vulkan-sdk.exe -ArgumentList "--accept-licenses --default-answer --confirm-command install" -Wait
+          $sdkPath = Get-ChildItem "C:\VulkanSDK" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          echo "VULKAN_SDK=$($sdkPath.FullName)" >> $env:GITHUB_ENV
+
+      - name: Install Vulkan SDK (Linux)
+        if: runner.os == 'Linux' && matrix.llama_vulkan == 'ON'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev
+
+      - name: Build llama.cpp (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd llama_cpp_src
+          cmake -B build -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_VULKAN=${{ matrix.llama_vulkan }} `
+            -DLLAMA_BUILD_TESTS=OFF `
+            -DLLAMA_BUILD_EXAMPLES=OFF `
+            -DLLAMA_BUILD_SERVER=OFF
+          cmake --build build --config Release
+          cmake --install build --prefix ./install --config Release
+          echo "LLAMA_CPP_PATH=${{ github.workspace }}/llama_cpp_src/install" >> $env:GITHUB_ENV
+
+      - name: Build llama.cpp (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          cd llama_cpp_src
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_VULKAN=${{ matrix.llama_vulkan }} \
+            -DGGML_METAL=${{ matrix.llama_metal }} \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF
+          cmake --build build --config Release
+          cmake --install build --prefix ./install
+          echo "LLAMA_CPP_PATH=${{ github.workspace }}/llama_cpp_src/install" >> $GITHUB_ENV
+
+      # ── Download onnxruntime-genai (for ASR + TTS) ──────────────────────
       - name: Download onnxruntime-genai (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -74,8 +119,21 @@ jobs:
           fi
           echo "ORT_GENAI_PATH=$GENAI_DIR" >> $GITHUB_ENV
 
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DORT_GENAI_PATH=${{ env.ORT_GENAI_PATH }}
+      # ── Configure and build EDGESCRIBE ──────────────────────────────────
+      - name: Configure CMake (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DORT_GENAI_PATH=${{ env.ORT_GENAI_PATH }} \
+            -DLLAMA_CPP_PATH=${{ env.LLAMA_CPP_PATH }}
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release `
+            -DORT_GENAI_PATH="$env:ORT_GENAI_PATH" `
+            -DLLAMA_CPP_PATH="$env:LLAMA_CPP_PATH"
 
       - name: Build
         run: cmake --build build --config Release
@@ -148,5 +206,3 @@ jobs:
             OpenScribeSetup.exe
             openscribe-win-x64.zip
             openscribe-osx-arm64.tar.gz
-            openscribe-osx-x64.tar.gz
-            openscribe-linux-x64.tar.gz

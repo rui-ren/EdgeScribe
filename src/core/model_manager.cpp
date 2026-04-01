@@ -50,16 +50,15 @@ static const struct {
     },
     {
         "qwen3-vl",
-        "Qwen3-VL-2B INT4",
-        "EDGESCRIBE/qwen3-vl-2b-onnx-cpu-int4",
-        "Vision + language. OCR, image understanding, SOAP notes. CPU INT4.",
+        "Qwen3-VL-2B Q4_K_M",
+        "Qwen/Qwen3-VL-2B-Instruct-GGUF",
+        "Vision + language. OCR, image understanding, SOAP notes. GGUF Q4_K_M.",
         "vlm",
-        "genai_config.json",
-        1500,
-        {"model.onnx", "model.onnx.data", "genai_config.json",
-         "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
-         "preprocessor_config.json"},
-        7,
+        "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+        1800,
+        {"Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+         "mmproj-Qwen3VL-2B-Instruct-F16.gguf"},
+        2,
     },
     {
         "kokoro",
@@ -71,17 +70,6 @@ static const struct {
         300,
         {"model.onnx", "voices.bin", "config.json"},
         3,
-    },
-    {
-        "speakers",
-        "ECAPA-TDNN Speaker",
-        "EDGESCRIBE/ecapa-tdnn-onnx",
-        "Speaker diarization. Identifies who is speaking. CPU optimized.",
-        "diarizer",
-        "speaker_model.onnx",
-        15,
-        {"speaker_model.onnx", "config.json"},
-        2,
     },
 };
 
@@ -141,16 +129,21 @@ ModelInfo ModelManager::GetModelInfo(const std::string& model_name) const {
     }
   }
   throw std::runtime_error("Unknown model: " + model_name +
-                           "\nRun 'EDGESCRIBE list' to see available models.");
+                           "\nRun 'edgescribe list' to see available models.");
 }
 
 std::string ModelManager::GetModelPath(const std::string& model_name) const {
   // First check if model_name is actually a direct path
-  if (fs::exists(model_name) && fs::is_directory(model_name)) {
-    // Accept if it contains any known config file
-    if (fs::exists(fs::path(model_name) / "genai_config.json") ||
-        fs::exists(fs::path(model_name) / "config.json") ||
-        fs::exists(fs::path(model_name) / "model.onnx")) {
+  if (fs::exists(model_name)) {
+    if (fs::is_directory(model_name)) {
+      // Accept if it contains any known config file
+      if (fs::exists(fs::path(model_name) / "genai_config.json") ||
+          fs::exists(fs::path(model_name) / "config.json") ||
+          fs::exists(fs::path(model_name) / "model.onnx")) {
+        return model_name;
+      }
+    } else if (fs::is_regular_file(model_name)) {
+      // Direct path to a model file (e.g., .gguf)
       return model_name;
     }
   }
@@ -158,8 +151,20 @@ std::string ModelManager::GetModelPath(const std::string& model_name) const {
   std::string path = cache_dir_ + "/" + model_name;
   if (!fs::exists(path)) {
     throw std::runtime_error("Model '" + model_name + "' is not downloaded.\n"
-                             "Run: EDGESCRIBE pull " + model_name);
+                             "Run: edgescribe pull " + model_name);
   }
+
+  // For GGUF models (single file), return the file path directly
+  for (size_t i = 0; i < kModelCount; i++) {
+    if (model_name == kModelManifest[i].name) {
+      std::string config = kModelManifest[i].config_file;
+      if (config.size() > 5 && config.substr(config.size() - 5) == ".gguf") {
+        return path + "/" + config;
+      }
+      break;
+    }
+  }
+
   return path;
 }
 
@@ -215,7 +220,9 @@ void ModelManager::Remove(const std::string& model_name) {
   }
 }
 
-void ModelManager::Pull(const std::string& model_name, ProgressCallback progress) {
+void ModelManager::Pull(const std::string& model_name,
+                        const std::string& token,
+                        ProgressCallback progress) {
   auto info = GetModelInfo(model_name);
 
   if (IsCached(model_name)) {
@@ -224,12 +231,22 @@ void ModelManager::Pull(const std::string& model_name, ProgressCallback progress
     return;
   }
 
+  // Resolve token: explicit param > HF_TOKEN env var
+  std::string auth_token = token;
+  if (auth_token.empty()) {
+    const char* env_token = std::getenv("HF_TOKEN");
+    if (env_token) auth_token = env_token;
+  }
+
   fs::path model_dir = fs::path(cache_dir_) / model_name;
   fs::create_directories(model_dir);
 
   std::cout << "Downloading " << info.display_name << " (~" << info.size_mb << " MB)..." << std::endl;
   std::cout << "From: huggingface.co/" << info.repo << std::endl;
   std::cout << "To:   " << model_dir.string() << std::endl;
+  if (!auth_token.empty()) {
+    std::cout << "Auth: using token" << std::endl;
+  }
   std::cout << std::endl;
 
   // Find the manifest entry
@@ -248,17 +265,18 @@ void ModelManager::Pull(const std::string& model_name, ProgressCallback progress
     std::string dest = (model_dir / filename).string();
 
     std::cout << "  " << filename << " ... " << std::flush;
-    DownloadFile(url, dest, progress);
+    DownloadFile(url, dest, auth_token, progress);
     std::cout << "done" << std::endl;
   }
 
   std::cout << std::endl;
   std::cout << "Model downloaded successfully!" << std::endl;
-  std::cout << "Run: EDGESCRIBE run --live --model " << model_name << std::endl;
+  std::cout << "Run: edgescribe run --live --model " << model_name << std::endl;
 }
 
 void ModelManager::DownloadFile(const std::string& url,
                                 const std::string& dest_path,
+                                const std::string& token,
                                 ProgressCallback progress) {
   // Validate URL — only allow HuggingFace downloads
   if (url.find("https://huggingface.co/") != 0) {
@@ -270,21 +288,35 @@ void ModelManager::DownloadFile(const std::string& url,
   auto has_shell_chars = [](const std::string& s) {
     return s.find_first_of(";|&`$(){}[]!#") != std::string::npos;
   };
-  if (has_shell_chars(url) || has_shell_chars(dest_path)) {
-    throw std::runtime_error("Invalid characters in URL or path.");
+  if (has_shell_chars(url) || has_shell_chars(dest_path) || has_shell_chars(token)) {
+    throw std::runtime_error("Invalid characters in URL, path, or token.");
   }
 
   // Use platform-native tools for HTTP download
   std::string command;
 
 #ifdef _WIN32
-  command = "powershell -NoProfile -Command \"& { "
-            "$ProgressPreference = 'SilentlyContinue'; "
-            "Invoke-WebRequest -Uri '" + url + "' "
-            "-OutFile '" + dest_path + "' "
-            "-UseBasicParsing }\"";
+  if (!token.empty()) {
+    command = "powershell -NoProfile -Command \"& { "
+              "$ProgressPreference = 'SilentlyContinue'; "
+              "Invoke-WebRequest -Uri '" + url + "' "
+              "-OutFile '" + dest_path + "' "
+              "-Headers @{ Authorization = 'Bearer " + token + "' } "
+              "-UseBasicParsing }\"";
+  } else {
+    command = "powershell -NoProfile -Command \"& { "
+              "$ProgressPreference = 'SilentlyContinue'; "
+              "Invoke-WebRequest -Uri '" + url + "' "
+              "-OutFile '" + dest_path + "' "
+              "-UseBasicParsing }\"";
+  }
 #else
-  command = "curl -sL -o '" + dest_path + "' '" + url + "'";
+  if (!token.empty()) {
+    command = "curl -sL -H 'Authorization: Bearer " + token + "' "
+              "-o '" + dest_path + "' '" + url + "'";
+  } else {
+    command = "curl -sL -o '" + dest_path + "' '" + url + "'";
+  }
 #endif
 
   int result = std::system(command.c_str());

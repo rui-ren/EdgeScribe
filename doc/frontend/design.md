@@ -1,14 +1,24 @@
-# EDGESCRIBE Frontend — Design & Plan
+# EDGESCRIBE Frontend
 
-## Approach: Embedded Web UI (served by EDGESCRIBE itself)
+The EDGESCRIBE frontend is a single-page web application served by the same
+C++ binary that runs the AI engines. No separate frontend server, no build
+tools, no npm — just static HTML, CSS, and JavaScript.
 
-The frontend is a single-page web app served by the same `EDGESCRIBE serve` binary. No separate frontend server needed. Users run `EDGESCRIBE serve` and open `http://localhost:8080` in their browser.
+---
 
-```
-EDGESCRIBE serve --port 8080
-  ├── API:  /v1/*          → REST endpoints (already implemented)
-  └── UI:   /              → static HTML/JS/CSS (embedded in binary or served from www/ folder)
-```
+## How It Runs
+
+There are two ways to use the UI:
+
+| Mode | Command | How it works |
+|------|---------|--------------|
+| **Native app** (recommended) | `edgescribe gui` | Opens a native desktop window via [webview](https://github.com/webview/webview). No browser needed. |
+| **Browser** | `edgescribe serve` | Starts the HTTP server; user opens `http://localhost:8080` in any browser. |
+
+Both modes serve the same `www/` files and talk to the same REST API.
+
+See [`doc/webview-integration.md`](../webview-integration.md) for full details
+on the native GUI.
 
 ---
 
@@ -16,182 +26,21 @@ EDGESCRIBE serve --port 8080
 
 | Layer | Choice | Why |
 |-------|--------|-----|
-| **Framework** | Vanilla HTML + CSS + JavaScript (no build step) | Zero dependencies, served as static files, no npm/webpack needed |
-| **CSS** | Tailwind CSS (CDN) or custom minimal CSS | Clean, responsive, dark mode |
-| **Audio** | Web Audio API + MediaRecorder | Browser-native mic access |
-| **HTTP** | Fetch API | Native, no axios needed |
-| **Icons** | Lucide (CDN) | Clean, MIT-licensed |
-| **Alternative** | React/Vue via CDN if complexity grows | Can upgrade later without build system |
+| **Framework** | Vanilla HTML + CSS + JS (ES6 modules) | Zero dependencies, no build step, easy to contribute |
+| **Styling** | Custom CSS with CSS custom properties | Dark theme, fully self-contained, no CDN needed |
+| **Audio** | Web Audio API (`AudioContext` + `ScriptProcessor`) | Browser-native mic capture at 16 kHz |
+| **HTTP** | `fetch()` API | Native, no libraries needed |
+| **Icons** | Emoji | Universal, zero-dependency, works offline |
+| **Notifications** | Custom toast system | Non-blocking, replaces intrusive `alert()` dialogs |
 
 **Why no React/Vue/build system?**
-- The UI is simple: a few panels and buttons
-- Static files can be embedded in the C++ binary or served from disk
-- Zero frontend build step = easier for contributors
-- Can upgrade to React later if needed
 
----
-
-## Pages / Views
-
-### 1. Dashboard (Home)
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  EDGESCRIBE                               [⚙ Settings]      │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
-│  │ 🎤 ASR  │  │ 🧠 Chat │  │ 🖼 Vision│  │ 🔊 TTS  │       │
-│  │         │  │         │  │         │  │         │       │
-│  │ Ready ✅│  │ Ready ✅│  │ Ready ✅│  │ Ready ✅│       │
-│  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │
-│                                                              │
-│  Recent Activity:                                            │
-│  • 2 min ago: Transcribed meeting.wav (5.2 min)             │
-│  • 10 min ago: Generated SOAP notes                         │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### 2. Live Transcription
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  🎤 Live Transcription           [● Recording] [⏹ Stop]     │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │ The patient presents with a three-day history of      │  │
-│  │ persistent cough and low-grade fever. She reports      │  │
-│  │ no shortness of breath or chest pain. ▊                │  │
-│  │                                                        │  │
-│  │ [text appears in real-time as you speak]               │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  Duration: 0:45  │  Chunks: 82  │  Model: nemotron          │
-│                                                              │
-│  [📋 Copy] [💾 Save as .txt] [📝 Generate SOAP Notes]       │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### 3. File Transcription
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  📁 File Transcription                                       │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │                                                        │  │
-│  │         Drop audio file here or click to browse        │  │
-│  │                    (.wav, .mp3)                         │  │
-│  │                                                        │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  ████████████████████████░░░░░░░  75%  Processing...         │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │ Transcript result appears here...                      │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  [📋 Copy] [💾 Save] [📝 SOAP] [📊 Summarize]              │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### 4. Chat
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  🧠 Chat                                                     │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │ 🤖 How can I help you today?                          │  │
-│  │                                                        │  │
-│  │ 👤 What medications interact with metformin?           │  │
-│  │                                                        │  │
-│  │ 🤖 Metformin can interact with several medications:   │  │
-│  │    • Contrast dyes (risk of lactic acidosis)          │  │
-│  │    • Carbonic anhydrase inhibitors                     │  │
-│  │    • ...                                               │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  ┌──────────────────────────────────────────┐ [Send]         │
-│  │ Type your message...                     │                │
-│  └──────────────────────────────────────────┘                │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### 5. Vision / OCR
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  🖼 Vision & OCR                                             │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────────┐  ┌──────────────────────────────────┐ │
-│  │                  │  │ Extracted text / Analysis:        │ │
-│  │   [Image         │  │                                   │ │
-│  │    Preview]      │  │ Rx: Amoxicillin 500mg            │ │
-│  │                  │  │ Sig: 1 cap PO TID x 10 days     │ │
-│  │                  │  │ Disp: 30 capsules                │ │
-│  └──────────────────┘  │ Refills: 2                       │ │
-│                         └──────────────────────────────────┘ │
-│  [📂 Upload Image]  [🔍 OCR]  [💬 Analyze with prompt]     │
-│                                                              │
-│  Prompt: ┌──────────────────────────────────────┐           │
-│          │ Extract medications and dosages      │           │
-│          └──────────────────────────────────────┘           │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### 6. Text-to-Speech
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  🔊 Text-to-Speech                                           │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │ Enter text to speak:                                   │  │
-│  │                                                        │  │
-│  │ The patient presents with acute bronchitis.            │  │
-│  │                                                        │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  Voice: [af_heart ▼]    Speed: [1.0]                        │
-│                                                              │
-│  [▶ Play]  [💾 Save WAV]                                    │
-│                                                              │
-│  🔊 ███████████████████░░░░░░░  Playing...                   │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### 7. Settings
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  ⚙ Settings                                                  │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  Models:                                                     │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │ nemotron    ASR    670 MB   ✅ Downloaded            │   │
-│  │ qwen3-vl    VLM    1.5 GB  ✅ Downloaded            │   │
-│  │ kokoro      TTS    300 MB  ⬇ Download               │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  Audio Input: [Default Microphone ▼]                        │
-│  Theme: [Dark ▼]                                            │
-│  API Port: [8080]                                            │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
+EDGESCRIBE is designed to work fully offline with zero internet dependencies.
+A vanilla JS approach means:
+- No npm, no webpack, no node_modules
+- Static files work immediately — drop into `www/` and go
+- Easy for anyone to modify (just edit HTML/CSS/JS)
+- Can be embedded in the C++ binary for a single-file distribution
 
 ---
 
@@ -199,156 +48,275 @@ EDGESCRIBE serve --port 8080
 
 ```
 www/
-├── index.html              # Single HTML file — all views
+├── index.html          # Single-page app shell — all pages in one file
 ├── css/
-│   └── style.css           # Custom styles + dark mode
-├── js/
-│   ├── app.js              # Router, state management
-│   ├── api.js              # API client (fetch wrappers)
-│   ├── audio.js            # Web Audio API mic capture
-│   ├── transcribe.js       # Live transcription UI logic
-│   ├── chat.js             # Chat interface logic
-│   ├── vision.js           # Vision/OCR upload + display
-│   └── tts.js              # TTS playback logic
-└── assets/
-    └── logo.svg            # EDGESCRIBE logo
+│   └── style.css       # Complete design system (colors, layout, components)
+└── js/
+    ├── app.js          # App controller — routing, page setup, event handlers
+    └── api.js          # API client — thin fetch() wrappers for /v1/ endpoints
 ```
+
+All frontend logic lives in two JS files:
+- **`api.js`** handles HTTP calls (what to send)
+- **`app.js`** handles UI behavior (what to show)
 
 ---
 
-## Implementation Plan
+## Pages
 
-### Phase 1: Core UI (MVP)
+### 🏠 Home (Dashboard)
 
-| Task | Priority | Effort |
-|------|----------|--------|
-| Static HTML shell with navigation | P0 | 2h |
-| Dashboard with engine status (`GET /v1/health`) | P0 | 1h |
-| Live transcription page (mic → push → display) | P0 | 4h |
-| File upload transcription page | P0 | 2h |
-| Copy/Save transcript buttons | P0 | 1h |
-| Dark mode CSS | P1 | 1h |
-| **Total Phase 1** | | **~11h** |
+The landing page shown on launch.
 
-### Phase 2: Full Features
+- **Welcome hero** — greeting with a description of what the app does
+- **Privacy pill** — prominent badge: "🛡️ 100% Private — Nothing leaves your device"
+- **Status cards** — clickable tiles for each AI engine, showing ready/not-available
+- **Quick actions** — large buttons to jump to the most common tasks
 
-| Task | Priority | Effort |
-|------|----------|--------|
-| Chat interface | P1 | 3h |
-| Vision/OCR upload + display | P1 | 3h |
-| TTS playback in browser | P1 | 2h |
-| SOAP notes generation (from transcript) | P1 | 2h |
-| Settings page (model status) | P2 | 2h |
-| **Total Phase 2** | | **~12h** |
+### 🎤 Record & Transcribe
 
-### Phase 3: Polish
+Real-time speech-to-text from the user's microphone.
 
-| Task | Priority | Effort |
-|------|----------|--------|
-| Responsive mobile layout | P2 | 2h |
-| Keyboard shortcuts | P2 | 1h |
-| Export (TXT, SRT, PDF) | P2 | 3h |
-| Transcription history (localStorage) | P2 | 2h |
-| Audio waveform visualization | P3 | 3h |
+- **Record button** — large red circle; click to start/stop, pulses while recording
+- **Live transcript** — text appears in real time with a blinking cursor
+- **Stats bar** — elapsed time and chunk count
+- **Actions** — Copy text, Save as .txt file, Generate SOAP notes, Clear
 
----
+Audio flows as: `Mic → Web Audio API (16 kHz PCM) → POST /v1/transcribe/push → display`
 
-## How to Serve the UI
+### 📁 Upload Audio
 
-Two options:
+Transcribe a pre-recorded audio file.
 
-### Option A: Serve from `www/` directory (development)
+- **Drop zone** — drag-and-drop area with click-to-browse fallback
+- **Progress bar** — gradient-filled bar during processing
+- **Transcript area** — result displayed with copy/save buttons
+- Supports WAV, MP3, and FLAC
 
-The API server serves static files from `www/` alongside the API:
+### 💬 Chat
 
-```cpp
-// In api_server.cpp — add static file serving
-svr.set_mount_point("/", "./www");
-```
+Conversational AI powered by the on-device LLM.
 
-### Option B: Embed in binary (production)
+- **Message thread** — scrolling list of user/assistant messages with avatars
+- **Input area** — auto-growing textarea with send button
+- **Keyboard shortcut** — Enter to send, Shift+Enter for new line
+- Welcome message explains capabilities and privacy
 
-Use CMake to embed the HTML/CSS/JS as binary resources. The server returns them from memory — no filesystem needed. This makes the single `EDGESCRIBE.exe` fully self-contained.
+### 🖼️ Image Analysis
 
-**Recommendation**: Start with Option A (easier to develop), migrate to Option B for release.
+Upload a photo for AI description or text extraction (OCR).
 
----
+- **Two-column layout** — image + prompt on the left, result on the right
+- **Two actions** — "Analyze Image" (general description) and "Extract Text (OCR)"
+- **Custom prompt** — user can ask specific questions about the image
 
-## Key Frontend Patterns
+### 🔊 Read Aloud
 
-### API Client
+Convert text to natural-sounding speech.
 
-```javascript
-// js/api.js
-const API_BASE = 'http://localhost:8080';
+- **Text input** — large textarea for typing or pasting
+- **Play / Save** — hear it immediately or download as a WAV file
+- **Audio player** — native HTML5 audio element for playback control
 
-export async function transcribeFile(file) {
-  const form = new FormData();
-  form.append('audio', file);
-  const res = await fetch(`${API_BASE}/v1/transcribe/file`, {
-    method: 'POST', body: form
-  });
-  return res.json();
-}
+### ⚙️ Settings
 
-export async function chat(prompt, system = '') {
-  const res = await fetch(`${API_BASE}/v1/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, system })
-  });
-  return res.json();
-}
+Model management and system information.
 
-export async function synthesize(text, voice = 'af_heart') {
-  const res = await fetch(`${API_BASE}/v1/tts/synthesize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice })
-  });
-  return res.blob(); // WAV audio
-}
-```
-
-### Live Mic Capture
-
-```javascript
-// js/audio.js
-export class MicCapture {
-  constructor(onChunk) {
-    this.onChunk = onChunk;
-  }
-
-  async start() {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { sampleRate: 16000, channelCount: 1 }
-    });
-    this.context = new AudioContext({ sampleRate: 16000 });
-    const source = this.context.createMediaStreamSource(this.stream);
-    
-    this.processor = this.context.createScriptProcessor(4096, 1, 1);
-    this.processor.onaudioprocess = (e) => {
-      const pcm = e.inputBuffer.getChannelData(0);
-      this.onChunk(pcm);
-    };
-    
-    source.connect(this.processor);
-    this.processor.connect(this.context.destination);
-  }
-
-  stop() {
-    this.processor?.disconnect();
-    this.stream?.getTracks().forEach(t => t.stop());
-    this.context?.close();
-  }
-}
-```
+- **Model table** — shows each AI model, what it powers, its size, and status
+- **About section** — version, license, GitHub link, privacy statement
 
 ---
 
-## Next Steps
+## Design System
 
-1. Create the `www/` directory with `index.html`, CSS, and JS files
-2. Add static file serving to `api_server.cpp`
-3. Implement Live Transcription page first (highest value)
-4. Add remaining pages iteratively
+### Color Palette
+
+The UI uses a warm dark theme with an indigo accent. All colors are defined
+as CSS custom properties in `:root` for easy theming.
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| `--bg-body` | `#0d1117` | Page background |
+| `--bg-secondary` | `#161b22` | Cards, sidebar |
+| `--bg-tertiary` | `#1c2333` | Inputs, elevated surfaces |
+| `--text-primary` | `#e6edf3` | Body text |
+| `--text-secondary` | `#8b949e` | Descriptions, labels |
+| `--accent` | `#6366f1` | Buttons, links, active states (indigo) |
+| `--success` | `#34d399` | Ready indicators, privacy badges (emerald) |
+| `--danger` | `#ef4444` | Record button, errors (red) |
+
+### Typography
+
+System font stack (no web fonts, works offline):
+
+```css
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+             'Helvetica Neue', Arial, sans-serif;
+```
+
+Base size: `15px`, line height: `1.6`.
+
+### Key Components
+
+| Component | Class | Description |
+|-----------|-------|-------------|
+| Card | `.card` | Rounded container with subtle border and hover effect |
+| Status card | `.stat-card` | Dashboard tile with icon, label, status; lifts on hover |
+| Button | `.btn`, `.btn-primary`, `.btn-lg` | Rounded buttons; primary uses gradient accent |
+| Record button | `.record-btn` | Red-bordered circle with pulse animation while recording |
+| Transcript area | `.transcript-area` | Scrollable text display with blinking cursor |
+| Drop zone | `.drop-zone` | Dashed-border area for drag-and-drop file upload |
+| Toast | `.toast` | Slide-in notification (success/error/info); auto-dismisses |
+| Privacy badge | `.privacy-badge` | Green-tinted badge emphasizing on-device processing |
+| Welcome hero | `.welcome-hero` | Gradient-background hero section on the dashboard |
+
+### Animations
+
+| Animation | Where | Effect |
+|-----------|-------|--------|
+| `pageIn` | Page transitions | Fade + slide up (0.3s) |
+| `recordPulse` | Record button | Expanding red ring while recording |
+| `blink` | Transcript cursor | Blinking caret in live transcript |
+| `pulse` | Status dots | Fading pulse for "loading" engine status |
+| `toastIn` / `toastOut` | Notifications | Slide up on appear, fade out on dismiss |
+| Button hover | All buttons | Subtle lift (`translateY(-1px)`) |
+
+### Responsive Breakpoints
+
+| Breakpoint | Changes |
+|------------|---------|
+| `≤ 900px` | Vision layout collapses to single column |
+| `≤ 768px` | Sidebar becomes a slide-out drawer with hamburger toggle; reduced padding |
+| `≤ 480px` | Card grid becomes single column; buttons stack vertically |
+
+---
+
+## JavaScript Architecture
+
+### `api.js` — API Client
+
+A thin wrapper around `fetch()`. Every backend endpoint has a matching
+exported function. The base URL is `window.location.origin` (same host).
+
+```
+health()                → GET  /v1/health
+listModels()            → GET  /v1/models
+transcribeFile(file)    → POST /v1/transcribe/file     (multipart)
+transcribeStreamStart() → POST /v1/transcribe/stream
+transcribePush(buffer)  → POST /v1/transcribe/push     (raw PCM)
+transcribeFlush()       → POST /v1/transcribe/flush
+chat(prompt)            → POST /v1/chat                (JSON)
+generateSoap(text)      → POST /v1/chat/soap           (JSON)
+summarize(text)         → POST /v1/chat/summarize      (JSON)
+analyzeImage(file, p)   → POST /v1/vision/analyze      (multipart)
+ocrImage(file)          → POST /v1/vision/ocr           (multipart)
+synthesize(text)        → POST /v1/tts/synthesize      (JSON → WAV blob)
+listVoices()            → GET  /v1/tts/voices
+```
+
+### `app.js` — App Controller
+
+Handles all UI logic in a single module:
+
+| Function | Purpose |
+|----------|---------|
+| `navigate(page)` | SPA router — shows/hides page divs, updates active nav item |
+| `init()` | Entry point — sets up nav, health check, page handlers, mobile toggle |
+| `showToast(msg, type)` | Creates a toast notification (success/error/info) |
+| `refreshHealth()` | Calls `/v1/health` and updates engine status indicators |
+| `setupLiveTranscription()` | Mic recording, PCM streaming, transcript display |
+| `setupFileTranscription()` | Drag-and-drop upload, progress bar, result display |
+| `setupChat()` | Message threading, input handling, send on Enter |
+| `setupVision()` | Image upload, analyze/OCR buttons, result display |
+| `setupTTS()` | Text input, play/save audio |
+
+### Routing
+
+Navigation is hash-free — pages are `<div class="page">` elements toggled
+by adding/removing the `.active` class. Each nav item has a `data-page`
+attribute that maps to `page-{name}`.
+
+### Error Handling
+
+All API errors are caught and displayed as toast notifications instead of
+`alert()` dialogs. Toasts slide in from the bottom-right and auto-dismiss
+after 3 seconds.
+
+---
+
+## UX Design Decisions
+
+The UI is designed to be usable by non-technical users (medical staff,
+administrative personnel, everyday users). Key decisions:
+
+### Friendly Language
+
+Technical terms are replaced with plain language:
+
+| Before (technical) | After (user-friendly) |
+|---|---|
+| "Live Transcription" | "Record & Transcribe" |
+| "File Transcription" | "Upload Audio" |
+| "Vision & OCR" | "Image Analysis" |
+| "Text-to-Speech" | "Read Aloud" |
+| "ASR / LLM / VLM / TTS" | "Speech / Chat / Vision / Voice" |
+| "● Ready" / "○ Not loaded" | "✓ Ready to use" / "○ Not available" |
+
+### Privacy-First Messaging
+
+Privacy is EDGESCRIBE's core value, so it's surfaced prominently:
+
+- **Sidebar footer** — permanent badge: "🛡️ 100% private — everything runs on your device"
+- **Dashboard hero** — pill badge: "🛡️ 100% Private — Nothing leaves your device"
+- **Chat welcome** — "Everything stays private — nothing is sent online."
+- **Settings page** — "🛡️ All processing is local. No telemetry. No cloud."
+
+### Non-Blocking Feedback
+
+- **Toast notifications** instead of `alert()` — less disruptive
+- **Inline status text** instead of modal spinners — "⏳ Generating..."
+- **Copy confirmation** via toast ("Copied to clipboard!") — no popup
+
+### Mobile Support
+
+The sidebar collapses into a slide-out drawer on small screens. A hamburger
+button (☰) appears in the top-left. Tapping a nav item closes the drawer
+automatically. Cards and buttons stack vertically on phones.
+
+---
+
+## Modifying the UI
+
+### Changing Colors
+
+Edit the CSS custom properties in `:root` at the top of `www/css/style.css`.
+All components reference these variables, so a single change propagates
+everywhere.
+
+### Adding a New Page
+
+1. Add a `<div class="page" id="page-mypage">` in `index.html`
+2. Add a `<a class="nav-item" data-page="mypage">` in the sidebar nav
+3. Add a `setupMyPage()` function in `app.js` and call it from `init()`
+4. The SPA router handles the rest automatically
+
+### Adding a New API Endpoint
+
+1. Add an exported function in `api.js` (follow the existing `fetch()` pattern)
+2. Call it from the relevant page handler in `app.js`
+
+---
+
+## Serving the UI
+
+The API server (`api_server.cpp`) auto-discovers the `www/` directory:
+
+```
+Search order:  ./www  →  ../www  (relative to the binary)
+```
+
+If found, it mounts the directory at `/` via `httplib::Server::set_mount_point`.
+The API endpoints under `/v1/` take precedence.
+
+For the Windows installer, `www/` is bundled alongside the binary at
+`{app}\www\` so it's always available.

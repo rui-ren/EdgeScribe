@@ -26,8 +26,11 @@ Thumbs.db
 
 # Dependencies (downloaded at build time)
 include/miniaudio.h
+include/webview/webview.h
 genai_extracted/
+llama_cpp_src/
 
 # Models (large files)
 models/
 *.onnx
+*.gguf

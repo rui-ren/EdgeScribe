@@ -1,5 +1,5 @@
 // EDGESCRIBE — Vision/OCR Engine
-// Wraps onnxruntime-genai MultiModalProcessor for image understanding (Qwen3-VL)
+// Wraps llama.cpp for image understanding (Qwen3-VL via GGUF)
 
 #pragma once
 
@@ -8,11 +8,10 @@
 #include <string>
 #include <vector>
 
-// Forward declarations
-struct OgaModel;
-struct OgaTokenizer;
-struct OgaTokenizerStream;
-struct OgaMultiModalProcessor;
+struct llama_model;
+struct llama_context;
+struct llama_sampler;
+struct mtmd_context;
 
 namespace EDGESCRIBE::vision {
 
@@ -24,6 +23,9 @@ class VisionEngine {
   explicit VisionEngine(const std::string& model_path,
                         const std::string& device = "cpu");
   ~VisionEngine();
+
+  VisionEngine(const VisionEngine&) = delete;
+  VisionEngine& operator=(const VisionEngine&) = delete;
 
   // Analyze an image with a text prompt
   std::string Analyze(const std::string& image_path,
@@ -56,13 +58,14 @@ class VisionEngine {
                                   int max_length,
                                   TokenCallback on_token);
 
-  std::string FormatVisionPrompt(const std::string& prompt,
-                                 int num_images);
+  void ResetContext();
 
-  std::unique_ptr<OgaModel> model_;
-  std::unique_ptr<OgaTokenizer> tokenizer_;
-  std::unique_ptr<OgaMultiModalProcessor> processor_;
-  std::string model_type_;
+  llama_model* model_ = nullptr;
+  llama_context* ctx_ = nullptr;
+  llama_sampler* sampler_ = nullptr;
+  mtmd_context* mtmd_ctx_ = nullptr;
+  std::string model_path_;
+  int n_ctx_ = 4096;
 };
 
 }  // namespace EDGESCRIBE::vision

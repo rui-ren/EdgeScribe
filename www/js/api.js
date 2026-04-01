@@ -48,6 +48,15 @@ export async function chat(prompt, system = 'You are a helpful assistant.', maxL
   return res.json();
 }
 
+export async function chatMultiTurn(messages, maxLength = 2048) {
+  const res = await fetch(`${API}/v1/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages, max_length: maxLength }),
+  });
+  return res.json();
+}
+
 export async function generateSoap(transcript) {
   const res = await fetch(`${API}/v1/chat/soap`, {
     method: 'POST',
@@ -94,5 +103,30 @@ export async function synthesize(text, voice = 'af_heart', speed = 1.0) {
 
 export async function listVoices() {
   const res = await fetch(`${API}/v1/tts/voices`);
+  return res.json();
+}
+
+// ── Memory / Sessions ──
+export async function getSessions() {
+  const res = await fetch(`${API}/v1/memory/sessions`);
+  return res.json();
+}
+
+export async function getSession(id) {
+  const res = await fetch(`${API}/v1/memory/sessions/${id}`);
+  return res.json();
+}
+
+export async function searchMemory(query) {
+  const res = await fetch(`${API}/v1/memory/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  return res.json();
+}
+
+export async function deleteSession(id) {
+  const res = await fetch(`${API}/v1/memory/sessions/${id}`, { method: 'DELETE' });
   return res.json();
 }

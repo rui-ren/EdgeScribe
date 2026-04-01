@@ -1,37 +1,108 @@
 // EDGESCRIBE — Vision/OCR Engine Implementation
-// Uses onnxruntime-genai MultiModalProcessor for image + text understanding
+// Uses llama.cpp with mtmd (multimodal) for image + text understanding (Qwen3-VL GGUF)
 
 #include "vision/vision_engine.h"
-#include "ort_genai.h"
+
+#include <llama.h>
+#include <ggml-backend.h>
+#include <mtmd.h>
+#include <mtmd-helper.h>
+
 #include <iostream>
+#include <filesystem>
 #include <sstream>
+#include <stdexcept>
+#include <vector>
 
 namespace EDGESCRIBE::vision {
 
-static std::unique_ptr<OgaModel> CreateModelWithDevice(
-    const std::string& model_path, const std::string& device) {
-  if (device.empty() || device == "cpu") {
-    return OgaModel::Create(model_path.c_str());
-  }
-  auto config = OgaConfig::Create(model_path.c_str());
-  config->ClearProviders();
-  config->AppendProvider(device.c_str());
-  config->AppendProvider("cpu");
-  return OgaModel::Create(*config);
+static int DetectGpuLayers(const std::string& device) {
+  if (device == "cpu") return 0;
+  return 999;
 }
 
 VisionEngine::VisionEngine(const std::string& model_path,
-                           const std::string& device) {
-  model_ = CreateModelWithDevice(model_path, device);
-  tokenizer_ = OgaTokenizer::Create(*model_);
-  processor_ = OgaMultiModalProcessor::Create(*model_);
+                           const std::string& device)
+    : model_path_(model_path) {
+  // Suppress verbose llama.cpp logs
+  llama_log_set([](enum ggml_log_level level, const char* text, void*) {
+    if (level >= GGML_LOG_LEVEL_WARN) std::cerr << text;
+  }, nullptr);
 
-  // Detect model type for proper prompt formatting
-  OgaString type = model_->GetType();
-  model_type_ = std::string(static_cast<const char*>(type));
+  // Load the LLM model
+  llama_model_params mparams = llama_model_default_params();
+  mparams.n_gpu_layers = DetectGpuLayers(device);
+
+  model_ = llama_model_load_from_file(model_path.c_str(), mparams);
+  if (!model_) {
+    throw std::runtime_error("Failed to load vision model: " + model_path);
+  }
+
+  // Create context
+  llama_context_params cparams = llama_context_default_params();
+  cparams.n_ctx = n_ctx_;
+  cparams.n_batch = 512;
+
+  ctx_ = llama_init_from_model(model_, cparams);
+  if (!ctx_) {
+    llama_model_free(model_);
+    model_ = nullptr;
+    throw std::runtime_error("Failed to create vision context");
+  }
+
+  // Load multimodal projector (mmproj) for vision encoding
+  // Try the standard naming pattern from HuggingFace
+  std::string mmproj_path;
+  auto slash_pos = model_path.rfind('/');
+  if (slash_pos == std::string::npos) slash_pos = model_path.rfind('\\');
+  std::string model_dir = (slash_pos != std::string::npos)
+      ? model_path.substr(0, slash_pos + 1) : "";
+
+  // Try exact HuggingFace naming: mmproj-Qwen3VL-2B-Instruct-F16.gguf
+  if (!model_dir.empty()) {
+    mmproj_path = model_dir + "mmproj-Qwen3VL-2B-Instruct-F16.gguf";
+    if (!std::filesystem::exists(mmproj_path)) {
+      // Try Q8_0 variant
+      mmproj_path = model_dir + "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf";
+    }
+    if (!std::filesystem::exists(mmproj_path)) {
+      // Try generic naming
+      mmproj_path = model_dir + "mmproj-model-f16.gguf";
+    }
+    if (!std::filesystem::exists(mmproj_path)) {
+      // Try deriving from model filename
+      auto dot_pos = model_path.rfind('.');
+      if (dot_pos != std::string::npos) {
+        mmproj_path = model_path.substr(0, dot_pos) + "-mmproj-f16.gguf";
+      }
+    }
+  }
+
+  if (!mmproj_path.empty() && std::filesystem::exists(mmproj_path)) {
+    auto mtmd_params = mtmd_context_params_default();
+    mtmd_ctx_ = mtmd_init_from_file(mmproj_path.c_str(), model_, mtmd_params);
+  }
+
+  if (!mtmd_ctx_) {
+    std::cerr << "[vision] Warning: mmproj model not found. "
+              << "Vision features will not work. Text-only mode available.\n";
+  }
+
+  // Initialize sampler chain
+  auto sparams = llama_sampler_chain_default_params();
+  sampler_ = llama_sampler_chain_init(sparams);
+  llama_sampler_chain_add(sampler_, llama_sampler_init_temp(0.6f));
+  llama_sampler_chain_add(sampler_, llama_sampler_init_top_p(0.9f, 1));
+  llama_sampler_chain_add(sampler_, llama_sampler_init_min_p(0.05f, 1));
+  llama_sampler_chain_add(sampler_, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 }
 
-VisionEngine::~VisionEngine() = default;
+VisionEngine::~VisionEngine() {
+  if (sampler_) llama_sampler_free(sampler_);
+  if (ctx_) llama_free(ctx_);
+  if (model_) llama_model_free(model_);
+  if (mtmd_ctx_) mtmd_free(mtmd_ctx_);
+}
 
 std::string VisionEngine::Analyze(const std::string& image_path,
                                   const std::string& prompt,
@@ -69,7 +140,6 @@ std::string VisionEngine::GenerateSOAPNotes(const std::string& transcript,
     return Analyze(image_path, prompt, 4096, on_token);
   }
 
-  // Text-only: use as vision model with no image
   return RunVisionGeneration(prompt, {}, 4096, on_token);
 }
 
@@ -83,58 +153,9 @@ std::string VisionEngine::DescribeMedicalImage(const std::string& image_path,
       on_token);
 }
 
-std::string VisionEngine::FormatVisionPrompt(const std::string& prompt,
-                                             int num_images) {
-  // Build the content string with image placeholders based on model type
-  std::string content;
-
-  if (model_type_.find("qwen") != std::string::npos ||
-      model_type_.find("Qwen") != std::string::npos) {
-    // Qwen-VL format
-    for (int i = 0; i < num_images; i++) {
-      content += "<|vision_start|><|image_pad|><|vision_end|>";
-    }
-    content += prompt;
-  } else if (model_type_.find("phi3v") != std::string::npos) {
-    // Phi-3 Vision format
-    for (int i = 0; i < num_images; i++) {
-      content += "<|image_" + std::to_string(i + 1) + "|>\n";
-    }
-    content += prompt;
-  } else if (model_type_.find("phi4") != std::string::npos) {
-    // Phi-4 multimodal format
-    for (int i = 0; i < num_images; i++) {
-      content += "<|image_" + std::to_string(i + 1) + "|>\n";
-    }
-    content += prompt;
-  } else {
-    // Generic: try image tags
-    for (int i = 0; i < num_images; i++) {
-      content += "<|image_" + std::to_string(i + 1) + "|>\n";
-    }
-    content += prompt;
-  }
-
-  // Build chat messages JSON
-  std::ostringstream json;
-  json << "[{\"role\":\"user\",\"content\":\"";
-  for (char c : content) {
-    switch (c) {
-      case '"': json << "\\\""; break;
-      case '\\': json << "\\\\"; break;
-      case '\n': json << "\\n"; break;
-      case '\r': json << "\\r"; break;
-      case '\t': json << "\\t"; break;
-      default: json << c; break;
-    }
-  }
-  json << "\"}]";
-
-  // Apply chat template
-  OgaString result = tokenizer_->ApplyChatTemplate(
-      nullptr, json.str().c_str(), nullptr, true);
-
-  return std::string(static_cast<const char*>(result));
+void VisionEngine::ResetContext() {
+  llama_memory_clear(llama_get_memory(ctx_), true);
+  llama_sampler_reset(sampler_);
 }
 
 std::string VisionEngine::RunVisionGeneration(
@@ -143,49 +164,131 @@ std::string VisionEngine::RunVisionGeneration(
     int max_length,
     TokenCallback on_token) {
 
-  // Format prompt with image placeholders
-  std::string formatted = FormatVisionPrompt(prompt,
-                                              static_cast<int>(image_paths.size()));
+  ResetContext();
 
-  // Load images if provided
-  std::unique_ptr<OgaImages> images;
-  if (!image_paths.empty()) {
-    std::vector<const char*> paths;
-    for (const auto& p : image_paths) {
-      paths.push_back(p.c_str());
-    }
-    images = OgaImages::Load(paths);
+  const auto* vocab = llama_model_get_vocab(model_);
+
+  // Build prompt text with image markers
+  std::string full_prompt;
+  const char* marker = mtmd_ctx_ ? mtmd_default_marker() : "";
+
+  for (size_t i = 0; i < image_paths.size(); i++) {
+    full_prompt += marker;
+  }
+  full_prompt += prompt;
+
+  // Apply chat template
+  llama_chat_message msgs[] = {
+      {"user", full_prompt.c_str()},
+  };
+
+  const char* chat_tmpl = llama_model_chat_template(model_, nullptr);
+  int len = llama_chat_apply_template(
+      chat_tmpl, msgs, 1, true, nullptr, 0);
+  if (len < 0) {
+    throw std::runtime_error("Failed to apply chat template for vision");
   }
 
-  // Process images + prompt through multi-modal processor
-  auto input_tensors = processor_->ProcessImages(
-      formatted.c_str(),
-      images.get());
+  std::vector<char> tbuf(static_cast<size_t>(len) + 1);
+  llama_chat_apply_template(
+      chat_tmpl, msgs, 1, true, tbuf.data(), static_cast<int32_t>(tbuf.size()));
+  std::string formatted(tbuf.data(), static_cast<size_t>(len));
 
-  // Create generator
-  auto params = OgaGeneratorParams::Create(*model_);
-  params->SetSearchOption("max_length", static_cast<double>(max_length));
+  // If we have images and mtmd context, use multimodal pipeline
+  if (mtmd_ctx_ && !image_paths.empty()) {
+    // Load images as bitmaps
+    std::vector<mtmd_bitmap*> bitmaps;
+    for (const auto& img_path : image_paths) {
+      auto* bmp = mtmd_helper_bitmap_init_from_file(mtmd_ctx_, img_path.c_str());
+      if (bmp) {
+        bitmaps.push_back(bmp);
+      } else {
+        std::cerr << "[vision] Warning: Failed to load image: " << img_path << "\n";
+      }
+    }
 
-  auto generator = OgaGenerator::Create(*model_, *params);
-  auto token_stream = OgaTokenizerStream::Create(*tokenizer_);
+    // Tokenize with multimodal support
+    mtmd_input_text text_input;
+    text_input.text       = formatted.c_str();
+    text_input.add_special = true;
+    text_input.parse_special = true;
 
-  // Set processed inputs
-  generator->SetInputs(*input_tensors);
+    auto* chunks = mtmd_input_chunks_init();
+    std::vector<const mtmd_bitmap*> cbitmaps(bitmaps.begin(), bitmaps.end());
+    int32_t ret = mtmd_tokenize(mtmd_ctx_, chunks, &text_input,
+                                cbitmaps.data(), cbitmaps.size());
+
+    if (ret != 0) {
+      mtmd_input_chunks_free(chunks);
+      for (auto* b : bitmaps) mtmd_bitmap_free(b);
+      throw std::runtime_error("Failed to tokenize multimodal input");
+    }
+
+    // Evaluate all chunks (text + image embeddings)
+    llama_pos new_n_past = 0;
+    ret = mtmd_helper_eval_chunks(mtmd_ctx_, ctx_, chunks, 0, 0,
+                                  llama_n_batch(ctx_), true, &new_n_past);
+
+    mtmd_input_chunks_free(chunks);
+    for (auto* b : bitmaps) mtmd_bitmap_free(b);
+
+    if (ret != 0) {
+      throw std::runtime_error("Failed to evaluate multimodal chunks");
+    }
+  } else {
+    // Text-only: standard tokenization
+    const int n_prompt_max = static_cast<int>(formatted.size()) + 256;
+    std::vector<llama_token> tokens(n_prompt_max);
+    const int n_prompt = llama_tokenize(
+        vocab,
+        formatted.c_str(),
+        static_cast<int32_t>(formatted.size()),
+        tokens.data(),
+        static_cast<int32_t>(tokens.size()),
+        true, true);
+
+    if (n_prompt < 0) {
+      throw std::runtime_error("Failed to tokenize vision prompt");
+    }
+    tokens.resize(static_cast<size_t>(n_prompt));
+
+    const int n_batch = llama_n_batch(ctx_);
+    for (int i = 0; i < n_prompt; i += n_batch) {
+      int n_eval = std::min(n_batch, n_prompt - i);
+      llama_batch batch = llama_batch_get_one(tokens.data() + i, n_eval);
+      if (llama_decode(ctx_, batch) != 0) {
+        throw std::runtime_error("Failed to decode vision prompt");
+      }
+    }
+  }
 
   // Generate tokens
   std::string result;
-  while (!generator->IsDone()) {
-    generator->GenerateNextToken();
-    auto tokens = generator->GetNextTokens();
-    if (!tokens.empty()) {
-      const char* text = token_stream->Decode(tokens[0]);
-      if (text && text[0] != '\0') {
-        result += text;
-        if (on_token) {
-          on_token(std::string(text));
-        }
+  int n_generated = 0;
+
+  while (n_generated < max_length) {
+    llama_token token = llama_sampler_sample(sampler_, ctx_, -1);
+
+    if (llama_token_is_eog(vocab, token)) {
+      break;
+    }
+
+    char buf[256];
+    int n = llama_token_to_piece(vocab, token, buf, sizeof(buf), 0, true);
+    if (n > 0) {
+      std::string piece(buf, static_cast<size_t>(n));
+      result += piece;
+      if (on_token) {
+        on_token(piece);
       }
     }
+
+    llama_batch next_batch = llama_batch_get_one(&token, 1);
+    if (llama_decode(ctx_, next_batch) != 0) {
+      break;
+    }
+
+    n_generated++;
   }
 
   return result;

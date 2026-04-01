@@ -2,7 +2,7 @@
 
 Base URL: `http://127.0.0.1:8080`
 
-Start server: `EDGESCRIBE serve --port 8080`
+Start server: `edgescribe serve --port 8080`
 
 All responses are JSON unless otherwise noted. CORS is enabled for local frontend development.
 

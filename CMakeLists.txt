@@ -6,9 +6,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Options ──────────────────────────────────────────────────────────────────
 option(EDGESCRIBE_DOWNLOAD_GENAI "Download onnxruntime-genai prebuilt libs" ON)
+option(EDGESCRIBE_ENABLE_GUI "Build with native GUI window (requires webview)" OFF)
 
 # Allow user to provide their own GenAI installation
 set(ORT_GENAI_PATH "" CACHE PATH "Path to onnxruntime-genai installation (include/ and lib/)")
+
+# llama.cpp for LLM/Vision inference (GGUF models)
+set(LLAMA_CPP_PATH "" CACHE PATH "Path to llama.cpp installation (include/ and lib/)")
 
 # ── Platform detection ───────────────────────────────────────────────────────
 if(WIN32)
@@ -77,8 +81,9 @@ set(EDGESCRIBE_SOURCES
     src/asr/transcriber.cpp
     src/asr/audio_capture.cpp
     src/asr/audio_file.cpp
-    src/asr/diarizer.cpp
     src/core/model_manager.cpp
+    src/core/sqlite3.c
+    src/core/memory_store.cpp
     src/llm/llm_engine.cpp
     src/vision/vision_engine.cpp
     src/tts/tts_engine.cpp
@@ -155,6 +160,84 @@ if(ORT_LIBRARY)
     message(STATUS "ORT lib: ${ORT_LIBRARY}")
 endif()
 
+# ── Find and link llama.cpp (for LLM/Vision GGUF inference) ─────────────────
+if(LLAMA_CPP_PATH)
+    message(STATUS "Using user-provided llama.cpp: ${LLAMA_CPP_PATH}")
+
+    # Find include directory
+    set(LLAMA_INCLUDE_DIR "")
+    if(EXISTS "${LLAMA_CPP_PATH}/include/llama.h")
+        set(LLAMA_INCLUDE_DIR "${LLAMA_CPP_PATH}/include")
+    elseif(EXISTS "${LLAMA_CPP_PATH}/llama.h")
+        set(LLAMA_INCLUDE_DIR "${LLAMA_CPP_PATH}")
+    else()
+        message(FATAL_ERROR "Cannot find llama.h in ${LLAMA_CPP_PATH}/include or ${LLAMA_CPP_PATH}")
+    endif()
+
+    # Find library directory
+    set(LLAMA_LIB_DIR "")
+    if(EXISTS "${LLAMA_CPP_PATH}/lib")
+        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/lib")
+    elseif(EXISTS "${LLAMA_CPP_PATH}/build/Release")
+        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/build/Release")
+    elseif(EXISTS "${LLAMA_CPP_PATH}/build/bin/Release")
+        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/build/bin/Release")
+    else()
+        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/lib")
+    endif()
+
+    find_library(LLAMA_LIBRARY
+        NAMES llama
+        PATHS "${LLAMA_LIB_DIR}"
+        NO_DEFAULT_PATH
+    )
+    if(NOT LLAMA_LIBRARY)
+        # Try build output directories
+        find_library(LLAMA_LIBRARY
+            NAMES llama
+            PATHS "${LLAMA_CPP_PATH}/build/src/Release"
+                  "${LLAMA_CPP_PATH}/build/Release"
+                  "${LLAMA_CPP_PATH}/build/bin/Release"
+        )
+    endif()
+
+    if(NOT LLAMA_LIBRARY)
+        message(FATAL_ERROR "Cannot find llama library in ${LLAMA_LIB_DIR}")
+    endif()
+
+    # Find mtmd library (multimodal/vision support)
+    find_library(MTMD_LIBRARY
+        NAMES mtmd
+        PATHS "${LLAMA_LIB_DIR}"
+        NO_DEFAULT_PATH
+    )
+
+    # Find ggml libraries (needed for backend device detection)
+    find_library(GGML_LIBRARY NAMES ggml PATHS "${LLAMA_LIB_DIR}" NO_DEFAULT_PATH)
+    find_library(GGML_BASE_LIBRARY NAMES ggml-base PATHS "${LLAMA_LIB_DIR}" NO_DEFAULT_PATH)
+
+    target_include_directories(edgescribe PRIVATE ${LLAMA_INCLUDE_DIR})
+    target_link_libraries(edgescribe PRIVATE ${LLAMA_LIBRARY})
+    if(GGML_LIBRARY)
+        target_link_libraries(edgescribe PRIVATE ${GGML_LIBRARY})
+    endif()
+    if(GGML_BASE_LIBRARY)
+        target_link_libraries(edgescribe PRIVATE ${GGML_BASE_LIBRARY})
+    endif()
+    if(MTMD_LIBRARY)
+        target_link_libraries(edgescribe PRIVATE ${MTMD_LIBRARY})
+        message(STATUS "llama.cpp mtmd lib: ${MTMD_LIBRARY}")
+    else()
+        message(WARNING "mtmd library not found — vision features may not link")
+    endif()
+    target_compile_definitions(edgescribe PRIVATE EDGESCRIBE_USE_LLAMA_CPP)
+
+    message(STATUS "llama.cpp include: ${LLAMA_INCLUDE_DIR}")
+    message(STATUS "llama.cpp lib: ${LLAMA_LIBRARY}")
+else()
+    message(STATUS "LLAMA_CPP_PATH not set — LLM/Vision will use onnxruntime-genai")
+endif()
+
 # ── Platform-specific audio backend for miniaudio ────────────────────────────
 if(APPLE)
     find_library(COREAUDIO_FRAMEWORK CoreAudio)
@@ -197,6 +280,73 @@ target_compile_definitions(edgescribe PRIVATE
     EDGESCRIBE_PLATFORM="${PLATFORM_RID}"
 )
 
+# ── Native GUI (webview) ────────────────────────────────────────────────────
+# When enabled, builds the `edgescribe gui` command that opens the web UI in
+# a native desktop window instead of requiring a browser.
+# Requires: webview.h in include/webview/  (see include/webview/README.md)
+#   Windows: also needs Microsoft.Web.WebView2 NuGet package
+#   macOS:   no extra deps (uses built-in WebKit)
+#   Linux:   needs libwebkit2gtk-4.0-dev
+if(EDGESCRIBE_ENABLE_GUI)
+    set(WEBVIEW_HEADER "${CMAKE_SOURCE_DIR}/include/webview/webview.h")
+    if(NOT EXISTS "${WEBVIEW_HEADER}")
+        message(FATAL_ERROR
+            "EDGESCRIBE_ENABLE_GUI=ON but webview.h not found at:\n"
+            "  ${WEBVIEW_HEADER}\n"
+            "Download it:  curl -sL -o include/webview/webview.h "
+            "https://raw.githubusercontent.com/webview/webview/master/webview.h\n"
+            "See include/webview/README.md for full setup instructions.")
+    endif()
+
+    target_sources(edgescribe PRIVATE src/gui/gui_launcher.cpp)
+    target_include_directories(edgescribe PRIVATE "${CMAKE_SOURCE_DIR}/include/webview")
+    target_compile_definitions(edgescribe PRIVATE EDGESCRIBE_HAS_GUI)
+
+    if(WIN32)
+        # WebView2 SDK (provides WebView2.h and WebView2Loader.dll)
+        set(WEBVIEW2_PATH "" CACHE PATH
+            "Path to Microsoft.Web.WebView2 NuGet package (contains build/native/)")
+        if(WEBVIEW2_PATH AND EXISTS "${WEBVIEW2_PATH}/build/native/include")
+            target_include_directories(edgescribe PRIVATE
+                "${WEBVIEW2_PATH}/build/native/include")
+            find_library(WEBVIEW2_LOADER_LIB WebView2Loader
+                PATHS "${WEBVIEW2_PATH}/build/native/x64"
+                NO_DEFAULT_PATH)
+            if(WEBVIEW2_LOADER_LIB)
+                target_link_libraries(edgescribe PRIVATE ${WEBVIEW2_LOADER_LIB})
+            endif()
+            # Copy WebView2Loader.dll next to the binary
+            file(GLOB WEBVIEW2_DLLS
+                "${WEBVIEW2_PATH}/build/native/x64/*.dll"
+                "${WEBVIEW2_PATH}/runtimes/win-x64/native/*.dll")
+            foreach(DLL ${WEBVIEW2_DLLS})
+                add_custom_command(TARGET edgescribe POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${DLL}" $<TARGET_FILE_DIR:edgescribe>)
+            endforeach()
+        else()
+            message(WARNING
+                "WEBVIEW2_PATH not set or invalid.  Set it to the extracted "
+                "Microsoft.Web.WebView2 NuGet package directory.\n"
+                "WebView2Loader.dll must be available at runtime.")
+        endif()
+        # Windows system libs required by webview
+        target_link_libraries(edgescribe PRIVATE
+            advapi32 ole32 shell32 shlwapi user32 version)
+    elseif(APPLE)
+        target_link_libraries(edgescribe PRIVATE "-framework WebKit")
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(WEBKIT2GTK REQUIRED webkit2gtk-4.0)
+        target_include_directories(edgescribe PRIVATE ${WEBKIT2GTK_INCLUDE_DIRS})
+        target_link_libraries(edgescribe PRIVATE ${WEBKIT2GTK_LIBRARIES})
+    endif()
+
+    message(STATUS "GUI: Enabled (native webview window)")
+else()
+    message(STATUS "GUI: Disabled (use -DEDGESCRIBE_ENABLE_GUI=ON to enable)")
+endif()
+
 # ── Copy DLLs to output (Windows) ───────────────────────────────────────────
 if(WIN32)
     file(GLOB GENAI_DLLS "${GENAI_LIB_DIR}/*.dll")
@@ -205,6 +355,20 @@ if(WIN32)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DLL}" $<TARGET_FILE_DIR:edgescribe>
         )
     endforeach()
+    # Copy llama.cpp DLLs
+    if(LLAMA_CPP_PATH AND LLAMA_LIB_DIR)
+        file(GLOB LLAMA_DLLS "${LLAMA_LIB_DIR}/*.dll")
+        # Also check bin/ directory (cmake --install puts DLLs there on Windows)
+        if(EXISTS "${LLAMA_CPP_PATH}/bin")
+            file(GLOB LLAMA_BIN_DLLS "${LLAMA_CPP_PATH}/bin/*.dll")
+            list(APPEND LLAMA_DLLS ${LLAMA_BIN_DLLS})
+        endif()
+        foreach(DLL ${LLAMA_DLLS})
+            add_custom_command(TARGET edgescribe POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DLL}" $<TARGET_FILE_DIR:edgescribe>
+            )
+        endforeach()
+    endif()
 elseif(APPLE)
     file(GLOB GENAI_DYLIBS "${GENAI_LIB_DIR}/*.dylib")
     foreach(DYLIB ${GENAI_DYLIBS})
@@ -212,6 +376,14 @@ elseif(APPLE)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DYLIB}" $<TARGET_FILE_DIR:edgescribe>
         )
     endforeach()
+    if(LLAMA_CPP_PATH AND LLAMA_LIB_DIR)
+        file(GLOB LLAMA_DYLIBS "${LLAMA_LIB_DIR}/*.dylib")
+        foreach(DYLIB ${LLAMA_DYLIBS})
+            add_custom_command(TARGET edgescribe POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DYLIB}" $<TARGET_FILE_DIR:edgescribe>
+            )
+        endforeach()
+    endif()
 else()
     file(GLOB GENAI_SOS "${GENAI_LIB_DIR}/*.so*")
     foreach(SO ${GENAI_SOS})
@@ -219,6 +391,14 @@ else()
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SO}" $<TARGET_FILE_DIR:edgescribe>
         )
     endforeach()
+    if(LLAMA_CPP_PATH AND LLAMA_LIB_DIR)
+        file(GLOB LLAMA_SOS "${LLAMA_LIB_DIR}/*.so*")
+        foreach(SO ${LLAMA_SOS})
+            add_custom_command(TARGET edgescribe POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SO}" $<TARGET_FILE_DIR:edgescribe>
+            )
+        endforeach()
+    endif()
 endif()
 
 # ── Install ──────────────────────────────────────────────────────────────────

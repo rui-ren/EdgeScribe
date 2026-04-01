@@ -72,22 +72,22 @@ curl -fsSL https://EDGESCRIBE.dev/install.sh | sh
 # --- Usage ---
 
 # Download a model (~600 MB, one-time)
-EDGESCRIBE pull nemotron
+edgescribe pull nemotron
 
 # Live microphone transcription
-EDGESCRIBE run --live
+edgescribe run --live
 
 # Transcribe a file
-EDGESCRIBE run meeting.wav
+edgescribe run meeting.wav
 
 # Transcribe and save to file
-EDGESCRIBE run meeting.wav -o meeting.txt
+edgescribe run meeting.wav -o meeting.txt
 
 # List downloaded models
-EDGESCRIBE list
+edgescribe list
 
 # Start as local API server (for UI/integrations)
-EDGESCRIBE serve
+edgescribe serve
 ```
 
 ### Why Ollama-style?
@@ -151,21 +151,21 @@ EDGESCRIBE/
 
 | Command | Engine | Status |
 |---------|--------|--------|
-| `EDGESCRIBE pull <model>` | Core | ✅ |
-| `EDGESCRIBE list` | Core | ✅ |
-| `EDGESCRIBE remove <model>` | Core | ✅ |
-| `EDGESCRIBE run --live` | ASR | ✅ Tested |
-| `EDGESCRIBE run <file.wav>` | ASR | ✅ Tested |
-| `EDGESCRIBE devices` | ASR | ✅ Tested |
-| `EDGESCRIBE chat "prompt"` | LLM | ✅ |
-| `EDGESCRIBE vision <image>` | Vision | ✅ |
-| `EDGESCRIBE vision <image> --ocr` | Vision | ✅ |
-| `EDGESCRIBE process --soap <file>` | LLM/Vision | ✅ |
-| `EDGESCRIBE process --summarize <file>` | LLM | ✅ |
-| `EDGESCRIBE process --fix-terms <file>` | LLM | ✅ |
-| `EDGESCRIBE speak "text"` | TTS | ✅ |
-| `EDGESCRIBE speak file.txt -o out.wav` | TTS | ✅ |
-| `EDGESCRIBE speak --voices` | TTS | ✅ |
+| `edgescribe pull <model>` | Core | ✅ |
+| `edgescribe list` | Core | ✅ |
+| `edgescribe remove <model>` | Core | ✅ |
+| `edgescribe run --live` | ASR | ✅ Tested |
+| `edgescribe run <file.wav>` | ASR | ✅ Tested |
+| `edgescribe devices` | ASR | ✅ Tested |
+| `edgescribe chat "prompt"` | LLM | ✅ |
+| `edgescribe vision <image>` | Vision | ✅ |
+| `edgescribe vision <image> --ocr` | Vision | ✅ |
+| `edgescribe process --soap <file>` | LLM/Vision | ✅ |
+| `edgescribe process --summarize <file>` | LLM | ✅ |
+| `edgescribe process --fix-terms <file>` | LLM | ✅ |
+| `edgescribe speak "text"` | TTS | ✅ |
+| `edgescribe speak file.txt -o out.wav` | TTS | ✅ |
+| `edgescribe speak --voices` | TTS | ✅ |
 
 **Supported models**:
 
@@ -198,10 +198,10 @@ EDGESCRIBE/
 
 ### Phase 2: Local API Server
 
-**Goal**: `EDGESCRIBE serve` exposes a local REST API for integrations.
+**Goal**: `edgescribe serve` exposes a local REST API for integrations.
 
 ```bash
-EDGESCRIBE serve --port 8080
+edgescribe serve --port 8080
 ```
 
 ```
@@ -373,25 +373,25 @@ EDGESCRIBE ships with a built-in model manifest (can be updated via GitHub):
 
 ```bash
 # Download all models (~2.5 GB total)
-EDGESCRIBE pull nemotron       # ASR
-EDGESCRIBE pull qwen3-vl       # Vision + Language
-EDGESCRIBE pull kokoro         # TTS
+edgescribe pull nemotron       # ASR
+edgescribe pull qwen3-vl       # Vision + Language
+edgescribe pull kokoro         # TTS
 
 # Doctor dictation → SOAP notes
-EDGESCRIBE run --live -o transcript.txt
-EDGESCRIBE process --soap transcript.txt
+edgescribe run --live -o transcript.txt
+edgescribe process --soap transcript.txt
 
 # OCR a prescription photo
-EDGESCRIBE vision prescription.jpg --prompt "Extract medications and dosages"
+edgescribe vision prescription.jpg --prompt "Extract medications and dosages"
 
 # Read back notes
-EDGESCRIBE speak soap_notes.txt
+edgescribe speak soap_notes.txt
 ```
 
 ### Download Flow
 
 ```
-EDGESCRIBE pull nemotron
+edgescribe pull nemotron
   │
   ├── Read manifest → repo = "EDGESCRIBE/nemotron-onnx-cpu"
   ├── Download each file with progress
@@ -501,7 +501,7 @@ Model (~600 MB) is downloaded separately on first run. Install size is small.
 | **Data privacy** | All processing is on-device. No network calls during transcription. |
 | **HIPAA compliance** | No PHI leaves the machine. No cloud dependency. |
 | **Model integrity** | SHA256 checksum verification on download. |
-| **Network calls** | Only for `EDGESCRIBE pull` (model download from HuggingFace). |
+| **Network calls** | Only for `edgescribe pull` (model download from HuggingFace). |
 | **Telemetry** | None. Zero telemetry, zero analytics. |
 | **Open source** | Full source available. Auditable by anyone. |
 
@@ -547,20 +547,20 @@ All three additional engines are implemented using the same onnxruntime-genai / 
 
 ```bash
 # LLM
-EDGESCRIBE chat "What medications interact with metformin?"
-EDGESCRIBE process --soap transcript.txt
-EDGESCRIBE process --summarize notes.txt
-EDGESCRIBE process --fix-terms transcript.txt
+edgescribe chat "What medications interact with metformin?"
+edgescribe process --soap transcript.txt
+edgescribe process --summarize notes.txt
+edgescribe process --fix-terms transcript.txt
 
 # Vision
-EDGESCRIBE vision prescription.jpg --ocr
-EDGESCRIBE vision xray.jpg --prompt "Describe findings"
-EDGESCRIBE process --soap transcript.txt --image xray.jpg
+edgescribe vision prescription.jpg --ocr
+edgescribe vision xray.jpg --prompt "Describe findings"
+edgescribe process --soap transcript.txt --image xray.jpg
 
 # TTS
-EDGESCRIBE speak "The patient presents with acute bronchitis."
-EDGESCRIBE speak soap_notes.txt -o readback.wav
-EDGESCRIBE speak --voices
+edgescribe speak "The patient presents with acute bronchitis."
+edgescribe speak soap_notes.txt -o readback.wav
+edgescribe speak --voices
 ```
 
 ---
@@ -569,7 +569,7 @@ EDGESCRIBE speak --voices
 
 ```
 Phase 1 (COMPLETE):  CLI tool — ASR, LLM, Vision, TTS all implemented
-Phase 2 (next):      Local API server — EDGESCRIBE serve
+Phase 2 (next):      Local API server — edgescribe serve
 Phase 3:             System tray + web dashboard UI
 Phase 4:             winget / brew / apt distribution
 

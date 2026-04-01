@@ -1,23 +1,27 @@
 // EDGESCRIBE — On-device AI assistant. Speech, vision, language.
 //
 // Usage:
-//   EDGESCRIBE pull nemotron              Download a model
-//   EDGESCRIBE run --live                 Live microphone transcription
-//   EDGESCRIBE run meeting.wav            Transcribe a WAV file
-//   EDGESCRIBE chat "prompt"              Chat with local LLM
-//   EDGESCRIBE vision image.jpg           Analyze image / OCR
-//   EDGESCRIBE process --soap file.txt    Generate SOAP notes
-//   EDGESCRIBE list                       List available/downloaded models
+//   edgescribe pull nemotron              Download a model
+//   edgescribe run --live                 Live microphone transcription
+//   edgescribe run meeting.wav            Transcribe a WAV file
+//   edgescribe chat "prompt"              Chat with local LLM
+//   edgescribe vision image.jpg           Analyze image / OCR
+//   edgescribe process --soap file.txt    Generate SOAP notes
+//   edgescribe list                       List available/downloaded models
 
 #include "asr/audio_capture.h"
 #include "asr/audio_file.h"
 #include "core/model_manager.h"
+#include "core/memory_store.h"
 #include "asr/transcriber.h"
-#include "asr/diarizer.h"
 #include "llm/llm_engine.h"
 #include "vision/vision_engine.h"
 #include "tts/tts_engine.h"
 #include "server/api_server.h"
+
+#ifdef EDGESCRIBE_HAS_GUI
+#include "gui/gui_launcher.h"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -52,46 +56,56 @@ static void PrintUsage() {
   std::cout << "On-device AI assistant. Speech, vision, language. Private. Open source." << std::endl;
   std::cout << std::endl;
   std::cout << "Commands:" << std::endl;
-  std::cout << "  EDGESCRIBE pull <model>              Download a model from HuggingFace" << std::endl;
-  std::cout << "  EDGESCRIBE list                       List available and downloaded models" << std::endl;
-  std::cout << "  EDGESCRIBE remove <model>             Delete a downloaded model" << std::endl;
+  std::cout << "  edgescribe pull <model>              Download a model from HuggingFace" << std::endl;
+  std::cout << "  edgescribe list                       List available and downloaded models" << std::endl;
+  std::cout << "  edgescribe remove <model>             Delete a downloaded model" << std::endl;
   std::cout << std::endl;
   std::cout << "Speech-to-Text (ASR):" << std::endl;
-  std::cout << "  EDGESCRIBE run --live [options]       Live microphone transcription" << std::endl;
-  std::cout << "  EDGESCRIBE run <file.wav> [options]   Transcribe a WAV file" << std::endl;
-  std::cout << "  EDGESCRIBE devices                    List audio input devices" << std::endl;
+  std::cout << "  edgescribe run --live [options]       Live microphone transcription" << std::endl;
+  std::cout << "  edgescribe run <file.wav> [options]   Transcribe a WAV file" << std::endl;
+  std::cout << "  edgescribe devices                    List audio input devices" << std::endl;
   std::cout << std::endl;
   std::cout << "Vision & Language:" << std::endl;
-  std::cout << "  EDGESCRIBE vision <image> [--prompt]  Analyze image (OCR, understanding)" << std::endl;
-  std::cout << "  EDGESCRIBE chat <prompt>              Chat with local LLM" << std::endl;
-  std::cout << "  EDGESCRIBE process --soap <file>      Generate SOAP notes from transcript" << std::endl;
+  std::cout << "  edgescribe vision <image> [--prompt]  Analyze image (OCR, understanding)" << std::endl;
+  std::cout << "  edgescribe chat <prompt>              Chat with local LLM (single-turn)" << std::endl;
+  std::cout << "  edgescribe chat                       Interactive multi-turn chat" << std::endl;
+  std::cout << "  edgescribe process --soap <file>      Generate SOAP notes from transcript" << std::endl;
+  std::cout << std::endl;
+  std::cout << "History:" << std::endl;
+  std::cout << "  edgescribe history                    List recent sessions" << std::endl;
+  std::cout << "  edgescribe history show <id>          Show session messages" << std::endl;
+  std::cout << "  edgescribe history search \"query\"     Search past conversations" << std::endl;
+  std::cout << "  edgescribe history delete <id>        Delete a session" << std::endl;
   std::cout << std::endl;
   std::cout << "Text-to-Speech:" << std::endl;
-  std::cout << "  EDGESCRIBE speak <text|file>          Read text aloud" << std::endl;
+  std::cout << "  edgescribe speak <text|file>          Read text aloud" << std::endl;
   std::cout << std::endl;
   std::cout << "Server:" << std::endl;
-  std::cout << "  EDGESCRIBE serve [--port 8080]        Start REST API server" << std::endl;
+  std::cout << "  edgescribe serve [--port 8080]        Start REST API server" << std::endl;
+#ifdef EDGESCRIBE_HAS_GUI
+  std::cout << "  edgescribe gui   [--port 8080]        Open native desktop app" << std::endl;
+#endif
   std::cout << std::endl;
   std::cout << "Options:" << std::endl;
   std::cout << "  --model <name|path>    Model to use (default: nemotron for ASR)" << std::endl;
-  std::cout << "  --device <ep>          Device: cpu, cuda, dml, vulkan, rocm, qnn, coreml" << std::endl;
+  std::cout << "  --device <ep>          Device: cpu, cuda, metal, vulkan, rocm" << std::endl;
   std::cout << "  -o <file>              Write output to file" << std::endl;
   std::cout << "  --version              Show version" << std::endl;
   std::cout << "  --help                 Show this help" << std::endl;
   std::cout << std::endl;
   std::cout << "Examples:" << std::endl;
-  std::cout << "  EDGESCRIBE pull nemotron                 # Download ASR model (~670 MB)" << std::endl;
-  std::cout << "  EDGESCRIBE pull qwen3-vl                 # Download vision+LLM (~1.5 GB)" << std::endl;
-  std::cout << "  EDGESCRIBE pull kokoro                   # Download TTS (~300 MB)" << std::endl;
-  std::cout << "  EDGESCRIBE run --live                    # Live transcription" << std::endl;
-  std::cout << "  EDGESCRIBE run meeting.wav -o notes.txt  # File transcription" << std::endl;
+  std::cout << "  edgescribe pull nemotron                 # Download ASR model (~670 MB)" << std::endl;
+  std::cout << "  edgescribe pull qwen3-vl                 # Download vision+LLM (~990 MB)" << std::endl;
+  std::cout << "  edgescribe pull kokoro                   # Download TTS (~300 MB)" << std::endl;
+  std::cout << "  edgescribe run --live                    # Live transcription" << std::endl;
+  std::cout << "  edgescribe run meeting.wav -o notes.txt  # File transcription" << std::endl;
 }
 
 // ── Command: pull ──────────────────────────────────────────────────────────
-static int CmdPull(const std::string& model_name) {
+static int CmdPull(const std::string& model_name, const std::string& token = "") {
   try {
     ModelManager manager;
-    manager.Pull(model_name);
+    manager.Pull(model_name, token);
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << std::endl;
@@ -108,15 +122,14 @@ static int CmdList() {
   std::cout << std::endl;
 
   // Group by type
-  const char* types[] = {"asr", "vlm", "tts", "diarizer"};
+  const char* types[] = {"asr", "vlm", "tts"};
   const char* labels[] = {
       "Speech-to-Text (ASR)",
       "Vision + Language (VLM)",
-      "Text-to-Speech (TTS)",
-      "Speaker Diarization"
+      "Text-to-Speech (TTS)"
   };
 
-  for (int t = 0; t < 4; t++) {
+  for (int t = 0; t < 3; t++) {
     std::cout << "  " << labels[t] << ":" << std::endl;
     for (const auto& m : models) {
       if (m.type == types[t]) {
@@ -335,109 +348,6 @@ static int CmdRunFile(const std::string& audio_path,
   }
 }
 
-// ── Command: run <file> --diarize ──────────────────────────────────────────
-static int CmdRunFileDiarized(const std::string& audio_path,
-                              const std::string& model_path,
-                              const std::string& diarizer_path,
-                              const std::string& output_file) {
-  try {
-    std::cout << "Loading audio: " << audio_path << std::endl;
-    auto audio = LoadWavFile(audio_path);
-    std::cout << "Audio: " << std::fixed << std::setprecision(1)
-              << audio.duration_seconds << "s ("
-              << audio.samples.size() << " samples)" << std::endl;
-
-    std::cout << "Loading ASR model..." << std::endl;
-    Transcriber transcriber(model_path);
-
-    std::cout << "Loading speaker model..." << std::endl;
-    EDGESCRIBE::asr::Diarizer diarizer(diarizer_path);
-
-    std::cout << std::string(60, '-') << std::endl;
-
-    auto start_time = std::chrono::steady_clock::now();
-
-    // Process audio in chunks — transcribe + identify speaker per chunk
-    constexpr size_t kChunkSize = 8960;
-    // Use larger segments for speaker embedding (better accuracy with more audio)
-    constexpr size_t kSpeakerSegmentSize = 16000 * 2;  // 2 seconds
-
-    std::string full_output;
-    std::vector<float> speaker_buffer;
-    int last_speaker = -1;
-
-    for (size_t i = 0; i < audio.samples.size(); i += kChunkSize) {
-      size_t remaining = std::min(kChunkSize, audio.samples.size() - i);
-      const float* chunk = audio.samples.data() + i;
-
-      // Accumulate for speaker embedding
-      speaker_buffer.insert(speaker_buffer.end(), chunk, chunk + remaining);
-
-      // Transcribe
-      std::string text = transcriber.ProcessChunk(chunk, remaining);
-
-      // When we have enough audio for speaker identification
-      if (!text.empty() && speaker_buffer.size() >= kSpeakerSegmentSize) {
-        auto segment = diarizer.IdentifySpeaker(
-            speaker_buffer.data(), speaker_buffer.size());
-        speaker_buffer.clear();
-
-        if (segment.speaker_id != last_speaker) {
-          if (!full_output.empty()) std::cout << std::endl;
-          std::cout << "[" << segment.speaker_label << "] ";
-          full_output += "\n[" + segment.speaker_label + "] ";
-          last_speaker = segment.speaker_id;
-        }
-        std::cout << text << std::flush;
-        full_output += text;
-      } else if (!text.empty()) {
-        std::cout << text << std::flush;
-        full_output += text;
-      }
-    }
-
-    // Flush remaining ASR
-    std::string flush_text = transcriber.Flush();
-    if (!flush_text.empty()) {
-      // Final speaker check on remaining buffer
-      if (!speaker_buffer.empty()) {
-        auto segment = diarizer.IdentifySpeaker(
-            speaker_buffer.data(), speaker_buffer.size());
-        if (segment.speaker_id != last_speaker) {
-          std::cout << std::endl << "[" << segment.speaker_label << "] ";
-          full_output += "\n[" + segment.speaker_label + "] ";
-        }
-      }
-      std::cout << flush_text;
-      full_output += flush_text;
-    }
-
-    auto end_time = std::chrono::steady_clock::now();
-    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        end_time - start_time);
-
-    std::cout << std::endl;
-    std::cout << std::string(60, '=') << std::endl;
-    std::cout << "  Speakers detected: " << diarizer.GetSpeakerCount() << std::endl;
-    double rtf = (elapsed_ms.count() / 1000.0) / audio.duration_seconds;
-    std::cout << "  Time: " << elapsed_ms.count() << "ms | RTF: "
-              << std::fixed << std::setprecision(2) << rtf << "x" << std::endl;
-
-    if (!output_file.empty()) {
-      std::ofstream ofs(output_file);
-      if (ofs.is_open()) {
-        ofs << full_output << std::endl;
-        std::cout << "  Saved to: " << output_file << std::endl;
-      }
-    }
-
-    return 0;
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << std::endl;
-    return 1;
-  }
-}
-
 // ── Argument parsing ───────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
   if (argc < 2) {
@@ -460,10 +370,18 @@ int main(int argc, char* argv[]) {
   // ── pull ──
   if (command == "pull") {
     if (argc < 3) {
-      std::cerr << "Usage: EDGESCRIBE pull <model>" << std::endl;
+      std::cerr << "Usage: edgescribe pull <model> [--token <hf_token>]" << std::endl;
       return 1;
     }
-    return CmdPull(argv[2]);
+    std::string pull_model = argv[2];
+    std::string pull_token;
+    for (int i = 3; i < argc; i++) {
+      std::string arg = argv[i];
+      if ((arg == "--token" || arg == "-t") && i + 1 < argc) {
+        pull_token = argv[++i];
+      }
+    }
+    return CmdPull(pull_model, pull_token);
   }
 
   // ── list ──
@@ -474,7 +392,7 @@ int main(int argc, char* argv[]) {
   // ── remove ──
   if (command == "remove" || command == "rm") {
     if (argc < 3) {
-      std::cerr << "Usage: EDGESCRIBE remove <model>" << std::endl;
+      std::cerr << "Usage: edgescribe remove <model>" << std::endl;
       return 1;
     }
     return CmdRemove(argv[2]);
@@ -491,6 +409,7 @@ int main(int argc, char* argv[]) {
     std::string output_file;
     std::string device = "cpu";
     std::string prompt;
+    bool interactive = false;
 
     for (int i = 2; i < argc; i++) {
       std::string arg = argv[i];
@@ -500,15 +419,17 @@ int main(int argc, char* argv[]) {
         if (i + 1 < argc) output_file = argv[++i];
       } else if (arg == "--device" || arg == "-d") {
         if (i + 1 < argc) device = argv[++i];
+      } else if (arg == "-i" || arg == "--interactive") {
+        interactive = true;
       } else if (arg[0] != '-') {
         if (!prompt.empty()) prompt += " ";
         prompt += arg;
       }
     }
 
+    // If no prompt given, enter interactive mode
     if (prompt.empty()) {
-      std::cerr << "Usage: EDGESCRIBE chat \"your prompt here\"" << std::endl;
-      return 1;
+      interactive = true;
     }
 
     try {
@@ -518,21 +439,186 @@ int main(int argc, char* argv[]) {
       std::cout << "Loading model" << (device != "cpu" ? " (" + device + ")" : "") << "..." << std::endl;
       EDGESCRIBE::llm::LlmEngine engine(model_path, device);
 
-      std::cout << std::string(60, '-') << std::endl;
-      std::string result = engine.Chat(
-          "You are a helpful assistant.",
-          prompt,
-          2048,
-          [](const std::string& token) { std::cout << token << std::flush; });
+      if (interactive) {
+        // Multi-turn interactive chat
+        std::vector<EDGESCRIBE::llm::ChatMessage> history;
+        history.push_back({"system", "You are a helpful assistant."});
 
-      std::cout << std::endl;
+        // Auto-save: start a session
+        EDGESCRIBE::MemoryStore memory(EDGESCRIBE::GetDefaultDbPath());
+        std::string session_id = memory.StartSession("chat", model_name);
 
-      if (!output_file.empty()) {
-        std::ofstream ofs(output_file);
-        if (ofs.is_open()) {
-          ofs << result << std::endl;
-          std::cout << "Saved to: " << output_file << std::endl;
+        std::cout << "Chat started. Type your message and press Enter. "
+                  << "Type /exit to quit, /clear to reset." << std::endl;
+        std::cout << std::string(60, '-') << std::endl;
+
+        while (g_running.load()) {
+          std::cout << "\nYou: ";
+          std::string user_input;
+          if (!std::getline(std::cin, user_input)) break;
+          if (user_input.empty()) continue;
+
+          if (user_input == "/exit" || user_input == "/quit") break;
+          if (user_input == "/clear") {
+            history.clear();
+            history.push_back({"system", "You are a helpful assistant."});
+            // Start a new session for the cleared conversation
+            memory.EndSession(session_id);
+            session_id = memory.StartSession("chat", model_name);
+            std::cout << "Chat history cleared." << std::endl;
+            continue;
+          }
+
+          history.push_back({"user", user_input});
+          memory.SaveMessage(session_id, "user", user_input);
+
+          std::cout << "\nAssistant: ";
+          std::string result = engine.Chat(
+              history, 2048,
+              [](const std::string& token) { std::cout << token << std::flush; });
+          std::cout << std::endl;
+
+          history.push_back({"assistant", result});
+          memory.SaveMessage(session_id, "assistant", result);
         }
+
+        memory.EndSession(session_id);
+
+        // Save full conversation if output file specified
+        if (!output_file.empty()) {
+          std::ofstream ofs(output_file);
+          if (ofs.is_open()) {
+            for (const auto& msg : history) {
+              if (msg.role == "system") continue;
+              std::string label = (msg.role == "user") ? "You" : "Assistant";
+              ofs << label << ": " << msg.content << "\n\n";
+            }
+            std::cout << "Conversation saved to: " << output_file << std::endl;
+          }
+        }
+      } else {
+        // Single-turn chat (original behavior)
+        std::cout << std::string(60, '-') << std::endl;
+        std::string result = engine.Chat(
+            "You are a helpful assistant.",
+            prompt,
+            2048,
+            [](const std::string& token) { std::cout << token << std::flush; });
+
+        std::cout << std::endl;
+
+        // Auto-save single-turn chat
+        try {
+          EDGESCRIBE::MemoryStore memory(EDGESCRIBE::GetDefaultDbPath());
+          std::string sid = memory.StartSession("chat", model_name);
+          memory.SaveMessage(sid, "user", prompt);
+          memory.SaveMessage(sid, "assistant", result);
+          memory.EndSession(sid);
+        } catch (...) { /* Don't fail on save errors */ }
+
+        if (!output_file.empty()) {
+          std::ofstream ofs(output_file);
+          if (ofs.is_open()) {
+            ofs << result << std::endl;
+            std::cout << "Saved to: " << output_file << std::endl;
+          }
+        }
+      }
+      return 0;
+    } catch (const std::exception& e) {
+      std::cerr << "Error: " << e.what() << std::endl;
+      return 1;
+    }
+  }
+
+  // ── history ──
+  if (command == "history") {
+    std::string subcmd;
+    std::string arg;
+
+    if (argc >= 3) subcmd = argv[2];
+    if (argc >= 4) arg = argv[3];
+
+    try {
+      EDGESCRIBE::MemoryStore memory(EDGESCRIBE::GetDefaultDbPath());
+
+      if (subcmd.empty() || subcmd == "list") {
+        // List recent sessions
+        auto sessions = memory.GetRecentSessions(20);
+        if (sessions.empty()) {
+          std::cout << "No sessions found." << std::endl;
+          return 0;
+        }
+        std::cout << std::left
+                  << std::setw(12) << "ID"
+                  << std::setw(12) << "Type"
+                  << std::setw(22) << "Started"
+                  << std::setw(8) << "Msgs"
+                  << std::endl;
+        std::cout << std::string(54, '-') << std::endl;
+        for (const auto& s : sessions) {
+          std::cout << std::setw(12) << s.id
+                    << std::setw(12) << s.type
+                    << std::setw(22) << s.started_at
+                    << std::setw(8) << s.message_count
+                    << std::endl;
+        }
+      } else if (subcmd == "show") {
+        if (arg.empty()) {
+          std::cerr << "Usage: edgescribe history show <session_id>" << std::endl;
+          return 1;
+        }
+        auto messages = memory.GetMessages(arg);
+        auto notes = memory.GetNotes(arg);
+
+        if (messages.empty() && notes.empty()) {
+          std::cout << "No data found for session: " << arg << std::endl;
+          return 0;
+        }
+
+        for (const auto& msg : messages) {
+          if (msg.role == "system") continue;
+          std::string label = (msg.role == "user") ? "You" : "Assistant";
+          std::cout << label << ": " << msg.content << "\n" << std::endl;
+        }
+        for (const auto& note : notes) {
+          std::cout << "[" << note.type << " output]" << std::endl;
+          std::cout << note.output_text << std::endl;
+        }
+      } else if (subcmd == "search") {
+        if (arg.empty()) {
+          std::cerr << "Usage: edgescribe history search \"query\"" << std::endl;
+          return 1;
+        }
+        // Collect remaining args as query
+        std::string query;
+        for (int i = 3; i < argc; i++) {
+          if (!query.empty()) query += " ";
+          query += argv[i];
+        }
+        auto results = memory.SearchMessages(query, 20);
+        if (results.empty()) {
+          std::cout << "No results found for: " << query << std::endl;
+          return 0;
+        }
+        for (const auto& msg : results) {
+          std::cout << "[" << msg.session_id << " " << msg.created_at << "] "
+                    << msg.role << ": "
+                    << msg.content.substr(0, 120)
+                    << (msg.content.size() > 120 ? "..." : "")
+                    << std::endl;
+        }
+      } else if (subcmd == "delete") {
+        if (arg.empty()) {
+          std::cerr << "Usage: edgescribe history delete <session_id>" << std::endl;
+          return 1;
+        }
+        memory.DeleteSession(arg);
+        std::cout << "Session " << arg << " deleted." << std::endl;
+      } else {
+        std::cerr << "Unknown subcommand: " << subcmd << std::endl;
+        std::cerr << "Usage: edgescribe history [list|show|search|delete]" << std::endl;
+        return 1;
       }
       return 0;
     } catch (const std::exception& e) {
@@ -565,8 +651,8 @@ int main(int argc, char* argv[]) {
     }
 
     if (image_path.empty()) {
-      std::cerr << "Usage: EDGESCRIBE vision <image.jpg> [--prompt \"...\"]" << std::endl;
-      std::cerr << "       EDGESCRIBE vision <image.jpg> --ocr" << std::endl;
+      std::cerr << "Usage: edgescribe vision <image.jpg> [--prompt \"...\"]" << std::endl;
+      std::cerr << "       edgescribe vision <image.jpg> --ocr" << std::endl;
       return 1;
     }
 
@@ -637,9 +723,9 @@ int main(int argc, char* argv[]) {
     }
 
     if (input_file.empty() || (!soap_mode && !summarize_mode && !fix_terms)) {
-      std::cerr << "Usage: EDGESCRIBE process --soap <transcript.txt>" << std::endl;
-      std::cerr << "       EDGESCRIBE process --summarize <file.txt>" << std::endl;
-      std::cerr << "       EDGESCRIBE process --fix-terms <transcript.txt>" << std::endl;
+      std::cerr << "Usage: edgescribe process --soap <transcript.txt>" << std::endl;
+      std::cerr << "       edgescribe process --summarize <file.txt>" << std::endl;
+      std::cerr << "       edgescribe process --fix-terms <transcript.txt>" << std::endl;
       return 1;
     }
 
@@ -683,6 +769,15 @@ int main(int argc, char* argv[]) {
 
       std::cout << std::endl;
 
+      // Auto-save process result
+      try {
+        std::string note_type = soap_mode ? "soap" : summarize_mode ? "summary" : "fix-terms";
+        EDGESCRIBE::MemoryStore memory(EDGESCRIBE::GetDefaultDbPath());
+        std::string sid = memory.StartSession("process", model_name);
+        memory.SaveNote(sid, note_type, content, result);
+        memory.EndSession(sid);
+      } catch (...) { /* Don't fail on save errors */ }
+
       if (!output_file.empty()) {
         std::ofstream ofs(output_file);
         if (ofs.is_open()) {
@@ -707,15 +802,12 @@ int main(int argc, char* argv[]) {
     std::string srt_file;
     std::string vtt_file;
     bool live_mode = false;
-    bool diarize = false;
 
     for (int i = 2; i < argc; i++) {
       std::string arg = argv[i];
 
       if (arg == "--live") {
         live_mode = true;
-      } else if (arg == "--diarize") {
-        diarize = true;
       } else if (arg == "--device" || arg == "-d") {
         if (i + 1 < argc) {
           device = argv[++i];
@@ -769,27 +861,13 @@ int main(int argc, char* argv[]) {
       return 1;
     }
 
-    // Resolve diarizer model if requested
-    std::string diarizer_path;
-    if (diarize) {
-      try {
-        diarizer_path = manager.GetModelPath("speakers");
-      } catch (const std::exception& e) {
-        std::cerr << "Error: Speaker model not found. Run: EDGESCRIBE pull speakers" << std::endl;
-        return 1;
-      }
-    }
-
     if (live_mode) {
       return CmdRunLive(model_path, output_file, device);
     } else if (!audio_file.empty()) {
-      if (diarize && !diarizer_path.empty()) {
-        return CmdRunFileDiarized(audio_file, model_path, diarizer_path, output_file);
-      }
       return CmdRunFile(audio_file, model_path, output_file, device, srt_file, vtt_file);
     } else {
-      std::cerr << "Usage: EDGESCRIBE run --live" << std::endl;
-      std::cerr << "       EDGESCRIBE run <file.wav> [--diarize]" << std::endl;
+      std::cerr << "Usage: edgescribe run --live" << std::endl;
+      std::cerr << "       edgescribe run <file.wav>" << std::endl;
       return 1;
     }
   }
@@ -842,10 +920,10 @@ int main(int argc, char* argv[]) {
     }
 
     if (text.empty()) {
-      std::cerr << "Usage: EDGESCRIBE speak \"Hello world\"" << std::endl;
-      std::cerr << "       EDGESCRIBE speak notes.txt" << std::endl;
-      std::cerr << "       EDGESCRIBE speak \"Hello\" -o output.wav" << std::endl;
-      std::cerr << "       EDGESCRIBE speak --voices" << std::endl;
+      std::cerr << "Usage: edgescribe speak \"Hello world\"" << std::endl;
+      std::cerr << "       edgescribe speak notes.txt" << std::endl;
+      std::cerr << "       edgescribe speak \"Hello\" -o output.wav" << std::endl;
+      std::cerr << "       edgescribe speak --voices" << std::endl;
       return 1;
     }
 
@@ -870,6 +948,57 @@ int main(int argc, char* argv[]) {
       return 1;
     }
   }
+
+  // ── gui ──
+#ifdef EDGESCRIBE_HAS_GUI
+  if (command == "gui") {
+    int port = 8080;
+    std::string host = "127.0.0.1";
+    std::string device = "cpu";
+    std::string asr_model;
+    std::string vlm_model;
+    std::string tts_model;
+
+    for (int i = 2; i < argc; i++) {
+      std::string arg = argv[i];
+      if (arg == "--port" || arg == "-p") {
+        if (i + 1 < argc) port = std::stoi(argv[++i]);
+      } else if (arg == "--host") {
+        if (i + 1 < argc) host = argv[++i];
+      } else if (arg == "--device" || arg == "-d") {
+        if (i + 1 < argc) device = argv[++i];
+      } else if (arg == "--asr-model") {
+        if (i + 1 < argc) asr_model = argv[++i];
+      } else if (arg == "--vlm-model") {
+        if (i + 1 < argc) vlm_model = argv[++i];
+      } else if (arg == "--tts-model") {
+        if (i + 1 < argc) tts_model = argv[++i];
+      }
+    }
+
+    // Auto-resolve model paths from cache
+    ModelManager manager;
+    try { if (asr_model.empty()) asr_model = manager.GetModelPath("nemotron"); } catch (...) {}
+    try { if (vlm_model.empty()) vlm_model = manager.GetModelPath("qwen3-vl"); } catch (...) {}
+    try { if (tts_model.empty()) tts_model = manager.GetModelPath("kokoro"); } catch (...) {}
+
+    EDGESCRIBE::gui::GuiConfig gui_config;
+    gui_config.server_config.port = port;
+    gui_config.server_config.host = host;
+    gui_config.server_config.device = device;
+    gui_config.server_config.asr_model = asr_model;
+    gui_config.server_config.vlm_model = vlm_model;
+    gui_config.server_config.tts_model = tts_model;
+
+    try {
+      EDGESCRIBE::gui::Launch(gui_config);
+      return 0;
+    } catch (const std::exception& e) {
+      std::cerr << "Error: " << e.what() << std::endl;
+      return 1;
+    }
+  }
+#endif
 
   // ── serve ──
   if (command == "serve") {
@@ -944,6 +1073,6 @@ int main(int argc, char* argv[]) {
   }
 
   std::cerr << "Unknown command: " << command << std::endl;
-  std::cerr << "Run 'EDGESCRIBE --help' for usage." << std::endl;
+  std::cerr << "Run 'edgescribe --help' for usage." << std::endl;
   return 1;
 }

@@ -27,7 +27,9 @@
 #include "llm/llm_engine.h"
 #include "vision/vision_engine.h"
 #include "tts/tts_engine.h"
+#include "core/memory_store.h"
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -127,43 +129,221 @@ static double ExtractJsonNumber(const std::string& body,
   }
 }
 
-// ── Server Implementation ───────────────────────────────────────────────────
+// Extract a JSON array of message objects: [{"role":"...","content":"..."},...]
+static std::vector<EDGESCRIBE::llm::ChatMessage>
+ExtractJsonMessages(const std::string& body) {
+  std::vector<EDGESCRIBE::llm::ChatMessage> messages;
+
+  std::string search = "\"messages\"";
+  auto pos = body.find(search);
+  if (pos == std::string::npos) return messages;
+
+  pos = body.find('[', pos);
+  if (pos == std::string::npos) return messages;
+
+  // Walk through the array finding each {role, content} object
+  size_t i = pos + 1;
+  while (i < body.size()) {
+    auto obj_start = body.find('{', i);
+    if (obj_start == std::string::npos) break;
+
+    auto obj_end = body.find('}', obj_start);
+    if (obj_end == std::string::npos) break;
+
+    std::string obj = body.substr(obj_start, obj_end - obj_start + 1);
+    std::string role = ExtractJsonString(obj, "role");
+    std::string content = ExtractJsonString(obj, "content");
+
+    if (!role.empty() && !content.empty()) {
+      messages.push_back({role, content});
+    }
+
+    i = obj_end + 1;
+    if (body.find(']', i) < body.find('{', i)) break;
+  }
+
+  return messages;
+}
 struct ApiServer::Impl {
   httplib::Server svr;
   ServerConfig config;
 
-  // Engines (lazy-initialized)
+  // LLM/Vision: loaded at startup via mmap — OS manages physical RAM
+  // ASR/TTS: lazy-loaded on first request — full RAM load, unloaded when idle
   std::unique_ptr<Transcriber> transcriber;
   std::unique_ptr<llm::LlmEngine> llm;
   std::unique_ptr<vision::VisionEngine> vision;
   std::unique_ptr<tts::TtsEngine> tts;
+
+  // Persistent memory store
+  std::unique_ptr<MemoryStore> memory;
 
   std::mutex asr_mutex;
   std::mutex llm_mutex;
   std::mutex vision_mutex;
   std::mutex tts_mutex;
 
-  bool running = false;
+  // Idle tracking for ONNX engines only (ASR/TTS)
+  std::chrono::steady_clock::time_point asr_last_used;
+  std::chrono::steady_clock::time_point tts_last_used;
+
+  static constexpr int kIdleTimeoutSeconds = 300;  // Unload ONNX engines after 5 min idle
+  std::atomic<bool> running{false};
+  std::thread idle_monitor_thread;
+
+  // Lazy-load helpers for ONNX engines
+  bool EnsureASR(httplib::Response& res);
+  bool EnsureLLM(httplib::Response& res);
+  bool EnsureVision(httplib::Response& res);
+  bool EnsureTTS(httplib::Response& res);
 
   void InitEngines();
   void RegisterRoutes();
+  void StartIdleMonitor();
+  void StopIdleMonitor();
 };
 
 void ApiServer::Impl::InitEngines() {
-  if (!config.asr_model.empty() && fs::exists(config.asr_model)) {
-    std::cout << "  Loading ASR model..." << std::endl;
-    transcriber = std::make_unique<Transcriber>(config.asr_model, config.device);
-  }
-
+  // LLM/Vision: load eagerly — llama.cpp uses mmap, so virtual memory is
+  // allocated but physical RAM is only used as pages are accessed. Idle cost
+  // is near zero. This avoids cold-start latency on first chat/vision request.
   if (!config.vlm_model.empty() && fs::exists(config.vlm_model)) {
-    std::cout << "  Loading VLM/LLM model..." << std::endl;
-    llm = std::make_unique<llm::LlmEngine>(config.vlm_model, config.device);
-    vision = std::make_unique<vision::VisionEngine>(config.vlm_model, config.device);
+    try {
+      std::cout << "  Loading VLM/LLM model (mmap)..." << std::endl;
+      llm = std::make_unique<llm::LlmEngine>(config.vlm_model, config.device);
+      vision = std::make_unique<vision::VisionEngine>(config.vlm_model, config.device);
+      std::cout << "  VLM/LLM ready." << std::endl;
+    } catch (const std::exception& e) {
+      std::cerr << "  Warning: Failed to load VLM/LLM: " << e.what() << std::endl;
+    }
   }
 
+  // ASR/TTS: lazy-loaded on first request. ONNX Runtime fully loads models
+  // into RAM (~670 MB for ASR, ~300 MB for TTS), so we defer until needed
+  // and unload after idle timeout to free memory.
+  if (!config.asr_model.empty() && fs::exists(config.asr_model)) {
+    std::cout << "  ASR model ready (will load on first request)" << std::endl;
+  }
   if (!config.tts_model.empty() && fs::exists(config.tts_model)) {
-    std::cout << "  Loading TTS model..." << std::endl;
+    std::cout << "  TTS model ready (will load on first request)" << std::endl;
+  }
+
+  // Initialize memory store
+  try {
+    memory = std::make_unique<MemoryStore>(GetDefaultDbPath());
+    std::cout << "  Memory store ready." << std::endl;
+  } catch (const std::exception& e) {
+    std::cerr << "  Warning: Memory store failed: " << e.what() << std::endl;
+  }
+
+  StartIdleMonitor();
+}
+
+bool ApiServer::Impl::EnsureASR(httplib::Response& res) {
+  std::lock_guard<std::mutex> lock(asr_mutex);
+  asr_last_used = std::chrono::steady_clock::now();
+  if (transcriber) return true;
+
+  if (config.asr_model.empty() || !fs::exists(config.asr_model)) {
+    res.status = 503;
+    res.set_content(JsonObj({{"error", JsonStr("ASR model not configured")}}),
+                    "application/json");
+    return false;
+  }
+
+  try {
+    std::cout << "  [lazy] Loading ASR model..." << std::endl;
+    transcriber = std::make_unique<Transcriber>(config.asr_model, config.device);
+    std::cout << "  [lazy] ASR model loaded." << std::endl;
+    return true;
+  } catch (const std::exception& e) {
+    res.status = 500;
+    res.set_content(JsonObj({{"error", JsonStr(std::string("Failed to load ASR: ") + e.what())}}),
+                    "application/json");
+    return false;
+  }
+}
+
+bool ApiServer::Impl::EnsureLLM(httplib::Response& res) {
+  // LLM is eagerly loaded at startup (mmap). Just check availability.
+  if (llm) return true;
+  res.status = 503;
+  res.set_content(JsonObj({{"error", JsonStr("LLM model not loaded")}}),
+                  "application/json");
+  return false;
+}
+
+bool ApiServer::Impl::EnsureVision(httplib::Response& res) {
+  // Vision is eagerly loaded at startup (mmap). Just check availability.
+  if (vision) return true;
+  res.status = 503;
+  res.set_content(JsonObj({{"error", JsonStr("Vision model not loaded")}}),
+                  "application/json");
+  return false;
+}
+
+bool ApiServer::Impl::EnsureTTS(httplib::Response& res) {
+  std::lock_guard<std::mutex> lock(tts_mutex);
+  tts_last_used = std::chrono::steady_clock::now();
+  if (tts) return true;
+
+  if (config.tts_model.empty() || !fs::exists(config.tts_model)) {
+    res.status = 503;
+    res.set_content(JsonObj({{"error", JsonStr("TTS model not configured")}}),
+                    "application/json");
+    return false;
+  }
+
+  try {
+    std::cout << "  [lazy] Loading TTS model..." << std::endl;
     tts = std::make_unique<tts::TtsEngine>(config.tts_model);
+    std::cout << "  [lazy] TTS model loaded." << std::endl;
+    return true;
+  } catch (const std::exception& e) {
+    res.status = 500;
+    res.set_content(JsonObj({{"error", JsonStr(std::string("Failed to load TTS: ") + e.what())}}),
+                    "application/json");
+    return false;
+  }
+}
+
+void ApiServer::Impl::StartIdleMonitor() {
+  idle_monitor_thread = std::thread([this]() {
+    while (running) {
+      std::this_thread::sleep_for(std::chrono::seconds(30));
+      if (!running) break;
+
+      auto now = std::chrono::steady_clock::now();
+      auto timeout = std::chrono::seconds(kIdleTimeoutSeconds);
+
+      // Only unload ONNX engines (ASR/TTS) — they fully load into RAM.
+      // LLM/Vision use mmap via llama.cpp, so the OS manages physical RAM.
+
+      {
+        std::lock_guard<std::mutex> lock(asr_mutex);
+        if (transcriber && (now - asr_last_used) > timeout) {
+          std::cout << "  [idle] Unloading ASR model (idle > "
+                    << kIdleTimeoutSeconds << "s, frees ~1.2 GB)" << std::endl;
+          transcriber.reset();
+        }
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(tts_mutex);
+        if (tts && (now - tts_last_used) > timeout) {
+          std::cout << "  [idle] Unloading TTS model (idle > "
+                    << kIdleTimeoutSeconds << "s, frees ~700 MB)" << std::endl;
+          tts.reset();
+        }
+      }
+    }
+  });
+}
+
+void ApiServer::Impl::StopIdleMonitor() {
+  running = false;
+  if (idle_monitor_thread.joinable()) {
+    idle_monitor_thread.join();
   }
 }
 
@@ -245,12 +425,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // Response: { "text": "...", "duration": 12.3 }
   svr.Post("/v1/transcribe/file",
            [this](const httplib::Request& req, httplib::Response& res) {
-    if (!transcriber) {
-      res.status = 503;
-      res.set_content(JsonObj({{"error", JsonStr("ASR model not loaded")}}),
-                      "application/json");
-      return;
-    }
+    if (!EnsureASR(res)) return;
 
     // Check for multipart file
     if (!req.form.has_file("audio")) {
@@ -304,12 +479,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // Client should POST audio chunks to /v1/transcribe/push after starting
   svr.Post("/v1/transcribe/stream",
            [this](const httplib::Request&, httplib::Response& res) {
-    if (!transcriber) {
-      res.status = 503;
-      res.set_content(JsonObj({{"error", JsonStr("ASR model not loaded")}}),
-                      "application/json");
-      return;
-    }
+    if (!EnsureASR(res)) return;
 
     std::lock_guard<std::mutex> lock(asr_mutex);
     transcriber->Reset();
@@ -326,12 +496,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // Response: { "text": "partial transcript", "is_final": false }
   svr.Post("/v1/transcribe/push",
            [this](const httplib::Request& req, httplib::Response& res) {
-    if (!transcriber) {
-      res.status = 503;
-      res.set_content(JsonObj({{"error", JsonStr("ASR model not loaded")}}),
-                      "application/json");
-      return;
-    }
+    if (!EnsureASR(res)) return;
 
     if (req.body.empty()) {
       res.status = 400;
@@ -358,12 +523,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // Flush remaining audio and get final transcript
   svr.Post("/v1/transcribe/flush",
            [this](const httplib::Request&, httplib::Response& res) {
-    if (!transcriber) {
-      res.status = 503;
-      res.set_content(JsonObj({{"error", JsonStr("ASR model not loaded")}}),
-                      "application/json");
-      return;
-    }
+    if (!EnsureASR(res)) return;
 
     std::lock_guard<std::mutex> lock(asr_mutex);
     std::string final_text = transcriber->Flush();
@@ -379,23 +539,46 @@ void ApiServer::Impl::RegisterRoutes() {
   // ── POST /v1/chat ──
   // Body: { "prompt": "...", "system": "...", "max_length": 2048 }
   // Response: { "text": "..." }
+  // ── POST /v1/chat ──
+  // Single-turn: { "prompt": "...", "system": "...", "max_length": 2048 }
+  // Multi-turn:  { "messages": [{"role":"system","content":"..."},
+  //                              {"role":"user","content":"..."},
+  //                              {"role":"assistant","content":"..."},
+  //                              {"role":"user","content":"..."}],
+  //                "max_length": 2048 }
   svr.Post("/v1/chat",
            [this](const httplib::Request& req, httplib::Response& res) {
-    if (!llm) {
-      res.status = 503;
-      res.set_content(JsonObj({{"error", JsonStr("LLM model not loaded")}}),
-                      "application/json");
-      return;
-    }
+    if (!EnsureLLM(res)) return;
 
-    std::string prompt = ExtractJsonString(req.body, "prompt");
-    std::string system = ExtractJsonString(req.body, "system");
     int max_length = static_cast<int>(
         ExtractJsonNumber(req.body, "max_length", 2048));
 
+    // Try multi-turn first (messages array)
+    auto messages = ExtractJsonMessages(req.body);
+    if (!messages.empty()) {
+      try {
+        std::lock_guard<std::mutex> lock(llm_mutex);
+        std::string result = llm->Chat(messages, max_length);
+
+        auto body = JsonObj({
+            {"text", JsonStr(result)},
+        });
+        res.set_content(body, "application/json");
+      } catch (const std::exception& e) {
+        res.status = 500;
+        res.set_content(JsonObj({{"error", JsonStr(e.what())}}),
+                        "application/json");
+      }
+      return;
+    }
+
+    // Fall back to single-turn (prompt + system)
+    std::string prompt = ExtractJsonString(req.body, "prompt");
+    std::string system = ExtractJsonString(req.body, "system");
+
     if (prompt.empty()) {
       res.status = 400;
-      res.set_content(JsonObj({{"error", JsonStr("Missing 'prompt' field")}}),
+      res.set_content(JsonObj({{"error", JsonStr("Missing 'prompt' or 'messages' field")}}),
                       "application/json");
       return;
     }
@@ -407,6 +590,16 @@ void ApiServer::Impl::RegisterRoutes() {
     try {
       std::lock_guard<std::mutex> lock(llm_mutex);
       std::string result = llm->Chat(system, prompt, max_length);
+
+      // Auto-save to memory
+      if (memory) {
+        try {
+          auto sid = memory->StartSession("chat");
+          memory->SaveMessage(sid, "user", prompt);
+          memory->SaveMessage(sid, "assistant", result);
+          memory->EndSession(sid);
+        } catch (...) {}
+      }
 
       auto body = JsonObj({
           {"text", JsonStr(result)},
@@ -423,12 +616,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // Body: { "transcript": "..." }
   svr.Post("/v1/chat/soap",
            [this](const httplib::Request& req, httplib::Response& res) {
-    if (!llm) {
-      res.status = 503;
-      res.set_content(JsonObj({{"error", JsonStr("LLM model not loaded")}}),
-                      "application/json");
-      return;
-    }
+    if (!EnsureLLM(res)) return;
 
     std::string transcript = ExtractJsonString(req.body, "transcript");
     if (transcript.empty()) {
@@ -455,12 +643,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // Body: { "text": "..." }
   svr.Post("/v1/chat/summarize",
            [this](const httplib::Request& req, httplib::Response& res) {
-    if (!llm) {
-      res.status = 503;
-      res.set_content(JsonObj({{"error", JsonStr("LLM model not loaded")}}),
-                      "application/json");
-      return;
-    }
+    if (!EnsureLLM(res)) return;
 
     std::string text = ExtractJsonString(req.body, "text");
     if (text.empty()) {
@@ -487,13 +670,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // Response: { "text": "..." }
   svr.Post("/v1/vision/analyze",
            [this](const httplib::Request& req, httplib::Response& res) {
-    if (!vision) {
-      res.status = 503;
-      res.set_content(
-          JsonObj({{"error", JsonStr("Vision model not loaded")}}),
-          "application/json");
-      return;
-    }
+    if (!EnsureVision(res)) return;
 
     if (!req.form.has_file("image")) {
       res.status = 400;
@@ -537,13 +714,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // Body: multipart form with "image" file
   svr.Post("/v1/vision/ocr",
            [this](const httplib::Request& req, httplib::Response& res) {
-    if (!vision) {
-      res.status = 503;
-      res.set_content(
-          JsonObj({{"error", JsonStr("Vision model not loaded")}}),
-          "application/json");
-      return;
-    }
+    if (!EnsureVision(res)) return;
 
     if (!req.form.has_file("image")) {
       res.status = 400;
@@ -582,12 +753,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // Response: WAV audio file
   svr.Post("/v1/tts/synthesize",
            [this](const httplib::Request& req, httplib::Response& res) {
-    if (!tts) {
-      res.status = 503;
-      res.set_content(JsonObj({{"error", JsonStr("TTS model not loaded")}}),
-                      "application/json");
-      return;
-    }
+    if (!EnsureTTS(res)) return;
 
     std::string text = ExtractJsonString(req.body, "text");
     std::string voice = ExtractJsonString(req.body, "voice");
@@ -628,12 +794,7 @@ void ApiServer::Impl::RegisterRoutes() {
   // ── GET /v1/tts/voices ──
   svr.Get("/v1/tts/voices",
           [this](const httplib::Request&, httplib::Response& res) {
-    if (!tts) {
-      res.status = 503;
-      res.set_content(JsonObj({{"error", JsonStr("TTS model not loaded")}}),
-                      "application/json");
-      return;
-    }
+    if (!EnsureTTS(res)) return;
 
     auto voices = tts->ListVoices();
     std::ostringstream ss;
@@ -644,6 +805,123 @@ void ApiServer::Impl::RegisterRoutes() {
     }
     ss << "]}";
     res.set_content(ss.str(), "application/json");
+  });
+
+  // ── Memory / History Endpoints ──
+
+  // GET /v1/memory/sessions — list recent sessions
+  svr.Get("/v1/memory/sessions",
+          [this](const httplib::Request&, httplib::Response& res) {
+    if (!memory) {
+      res.status = 503;
+      res.set_content(JsonObj({{"error", JsonStr("Memory store not available")}}),
+                      "application/json");
+      return;
+    }
+
+    auto sessions = memory->GetRecentSessions(50);
+    std::ostringstream ss;
+    ss << "{\"sessions\":[";
+    for (size_t i = 0; i < sessions.size(); i++) {
+      if (i > 0) ss << ",";
+      ss << JsonObj({
+          {"id", JsonStr(sessions[i].id)},
+          {"type", JsonStr(sessions[i].type)},
+          {"model", JsonStr(sessions[i].model)},
+          {"started_at", JsonStr(sessions[i].started_at)},
+          {"message_count", std::to_string(sessions[i].message_count)},
+      });
+    }
+    ss << "]}";
+    res.set_content(ss.str(), "application/json");
+  });
+
+  // GET /v1/memory/sessions/:id — get messages for a session
+  svr.Get(R"(/v1/memory/sessions/([a-zA-Z0-9_]+))",
+          [this](const httplib::Request& req, httplib::Response& res) {
+    if (!memory) {
+      res.status = 503;
+      res.set_content(JsonObj({{"error", JsonStr("Memory store not available")}}),
+                      "application/json");
+      return;
+    }
+
+    std::string session_id = req.matches[1];
+    auto messages = memory->GetMessages(session_id);
+    auto notes = memory->GetNotes(session_id);
+
+    std::ostringstream ss;
+    ss << "{\"session_id\":" << JsonStr(session_id);
+    ss << ",\"messages\":[";
+    for (size_t i = 0; i < messages.size(); i++) {
+      if (i > 0) ss << ",";
+      ss << JsonObj({
+          {"role", JsonStr(messages[i].role)},
+          {"content", JsonStr(messages[i].content)},
+          {"created_at", JsonStr(messages[i].created_at)},
+      });
+    }
+    ss << "],\"notes\":[";
+    for (size_t i = 0; i < notes.size(); i++) {
+      if (i > 0) ss << ",";
+      ss << JsonObj({
+          {"type", JsonStr(notes[i].type)},
+          {"output_text", JsonStr(notes[i].output_text)},
+          {"created_at", JsonStr(notes[i].created_at)},
+      });
+    }
+    ss << "]}";
+    res.set_content(ss.str(), "application/json");
+  });
+
+  // POST /v1/memory/search — search messages
+  svr.Post("/v1/memory/search",
+           [this](const httplib::Request& req, httplib::Response& res) {
+    if (!memory) {
+      res.status = 503;
+      res.set_content(JsonObj({{"error", JsonStr("Memory store not available")}}),
+                      "application/json");
+      return;
+    }
+
+    std::string query = ExtractJsonString(req.body, "query");
+    if (query.empty()) {
+      res.status = 400;
+      res.set_content(JsonObj({{"error", JsonStr("Missing 'query' field")}}),
+                      "application/json");
+      return;
+    }
+
+    auto results = memory->SearchMessages(query, 20);
+    std::ostringstream ss;
+    ss << "{\"results\":[";
+    for (size_t i = 0; i < results.size(); i++) {
+      if (i > 0) ss << ",";
+      ss << JsonObj({
+          {"session_id", JsonStr(results[i].session_id)},
+          {"role", JsonStr(results[i].role)},
+          {"content", JsonStr(results[i].content)},
+          {"created_at", JsonStr(results[i].created_at)},
+      });
+    }
+    ss << "]}";
+    res.set_content(ss.str(), "application/json");
+  });
+
+  // DELETE /v1/memory/sessions/:id — delete a session
+  svr.Delete(R"(/v1/memory/sessions/([a-zA-Z0-9_]+))",
+             [this](const httplib::Request& req, httplib::Response& res) {
+    if (!memory) {
+      res.status = 503;
+      res.set_content(JsonObj({{"error", JsonStr("Memory store not available")}}),
+                      "application/json");
+      return;
+    }
+
+    std::string session_id = req.matches[1];
+    memory->DeleteSession(session_id);
+    res.set_content(JsonObj({{"deleted", JsonStr(session_id)}}),
+                    "application/json");
   });
 }
 
@@ -667,7 +945,8 @@ void ApiServer::Start() {
             << std::endl;
   std::cout << std::endl;
 
-  std::cout << "Loading models..." << std::endl;
+  std::cout << "Initializing..." << std::endl;
+  impl_->running = true;
   impl_->InitEngines();
 
   std::cout << std::endl;
@@ -731,8 +1010,9 @@ void ApiServer::Start() {
 
 void ApiServer::Stop() {
   if (impl_->running) {
-    impl_->svr.stop();
     impl_->running = false;
+    impl_->svr.stop();
+    impl_->StopIdleMonitor();
   }
 }
 

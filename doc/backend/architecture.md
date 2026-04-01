@@ -4,7 +4,7 @@
 
 The EDGESCRIBE backend is a single C++ binary (`EDGESCRIBE.exe`) that provides:
 1. A CLI interface for all AI operations
-2. A local REST API server (`EDGESCRIBE serve`)
+2. A local REST API server (`edgescribe serve`)
 
 All inference runs on-device via ONNX Runtime and onnxruntime-genai. No cloud calls.
 
@@ -30,9 +30,12 @@ src/
 │   ├── tts_engine.h/cpp          # Kokoro ONNX model via ORT C++ API
 │   ├── phonemizer.h/cpp          # espeak-ng G2P (dynamically loaded)
 │   └── kokoro_vocab.h            # IPA → Kokoro token ID mapping
-└── server/                       # REST API server
-    ├── api_server.h              # Server config and public API
-    └── api_server.cpp            # HTTP routes via cpp-httplib
+├── server/                       # REST API server
+│   ├── api_server.h              # Server config and public API
+│   └── api_server.cpp            # HTTP routes via cpp-httplib
+└── gui/                          # Native GUI (optional, requires webview)
+    ├── gui_launcher.h            # GuiConfig struct and Launch() declaration
+    └── gui_launcher.cpp          # Starts server thread + webview window
 ```
 
 ---

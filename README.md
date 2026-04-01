@@ -9,8 +9,9 @@ Built for privacy-first use cases like HIPAA-compliant medical transcription, me
 ## Features
 
 - **100% on-device** — All processing happens locally. Zero network calls during use.
-- **Cross-platform** — Windows, macOS (Intel & Apple Silicon), Linux.
-- **4-engine AI stack** — ASR + Vision + LLM + TTS in only ~2.5 GB.
+- **GPU accelerated** — Vulkan (Windows, any GPU) and Metal (macOS). Auto-detects GPU, falls back to CPU.
+- **Cross-platform** — Windows x64 and macOS Apple Silicon (M1/M2/M3/M4). Linux and macOS Intel planned.
+- **4-engine AI stack** — ASR + Vision + LLM + TTS in only ~1.7 GB.
 - **Real-time transcription** — Live microphone to text with streaming output.
 - **Vision & OCR** — Analyze images, extract text from documents.
 - **LLM chat** — Local language model for SOAP notes, summaries, terminology fixes.
@@ -19,6 +20,33 @@ Built for privacy-first use cases like HIPAA-compliant medical transcription, me
 - **Small footprint** — ~2 MB app + ~80 MB runtime. Models downloaded separately.
 - **CPU-capable** — No GPU required. Runs on any modern laptop.
 - **MIT licensed** — Fully open source. Auditable by anyone.
+
+## Why Native C++? Performance by Design
+
+EDGESCRIBE is built as a **single native C++ binary** where the HTTP server, inference engines, and audio pipeline all run **in the same process**. This is a deliberate architectural choice for maximum edge performance.
+
+### How EDGESCRIBE compares
+
+| | EDGESCRIBE (C++) | Ollama (Go) | LM Studio (Electron) | Jan.ai (Tauri) |
+|---|---|---|---|---|
+| **Inference engine** | llama.cpp + ONNX Runtime | llama.cpp | llama.cpp | llama.cpp (via Cortex.cpp) |
+| **Server / shell** | C++ (httplib.h) | Go HTTP server | Node.js (Electron) | Rust shell (Tauri) + C++ (Cortex) |
+| **Frontend** | Vanilla HTML/JS | None (CLI) | React (Electron) | React (Tauri) |
+| **FFI boundary** | ✅ None — all C++ | ⚠️ CGO bridge | ⚠️ Node.js ↔ C++ | ⚠️ TS ↔ C++ |
+| **Binary size** | ~2 MB | ~30 MB | ~400 MB | ~80 MB |
+| **RAM overhead** | ~5 MB (no runtime) | ~30 MB (Go) | ~300 MB (Chromium) | ~50 MB (Tauri) |
+| **GC pauses** | ✅ None | ⚠️ Go GC | ⚠️ V8 GC | ⚠️ V8 GC (webview) |
+| **Multi-modal** | ✅ ASR + LLM + Vision + TTS | Text + Vision | Text + Vision | Text + Vision |
+| **Focus** | Medical / domain-specific | Developer API | Consumer chat UI | "Open ChatGPT" |
+| **Deployment** | Single binary, zero deps | Single binary | Installer | Installer |
+
+### Why this matters on your laptop
+
+Most local AI tools (Ollama, LM Studio, etc.) use Go or Python servers that call into C/C++ inference libraries through a **foreign function interface (FFI)**. Every token, every audio chunk, every image crosses a language boundary — adding latency and memory overhead.
+
+EDGESCRIBE eliminates this entirely. The HTTP server ([cpp-httplib](https://github.com/yhirose/cpp-httplib)) and inference engines ([llama.cpp](https://github.com/ggerganov/llama.cpp) for LLM/Vision, [ONNX Runtime](https://github.com/microsoft/onnxruntime) for ASR/TTS) share the same address space. Inference output flows directly to the HTTP response with **zero serialization, zero copies, zero boundary crossings**.
+
+The result: lower latency, lower memory usage, and smoother real-time streaming — especially noticeable on laptops without dedicated GPUs.
 
 ## Quick Start
 
@@ -30,33 +58,31 @@ Grab the latest release for your platform from [Releases](https://github.com/EDG
 |----------|----------|
 | Windows x64 | `EDGESCRIBE-win-x64.zip` |
 | macOS Apple Silicon | `EDGESCRIBE-osx-arm64.tar.gz` |
-| macOS Intel | `EDGESCRIBE-osx-x64.tar.gz` |
-| Linux x64 | `EDGESCRIBE-linux-x64.tar.gz` |
 
 ### 2. Download Models
 
 ```bash
 # Speech-to-text (required, ~670 MB)
-EDGESCRIBE pull nemotron
+edgescribe pull nemotron
 
-# Vision + language — OCR, SOAP notes (optional, ~1.5 GB)
-EDGESCRIBE pull qwen3-vl
+# Vision + language — OCR, SOAP notes (optional, ~990 MB)
+edgescribe pull qwen3-vl
 
 # Text-to-speech (optional, ~300 MB)
-EDGESCRIBE pull kokoro
+edgescribe pull kokoro
 ```
 
 ### 3. Transcribe
 
 ```bash
 # Live microphone transcription
-EDGESCRIBE run --live
+edgescribe run --live
 
 # Transcribe a WAV file
-EDGESCRIBE run meeting.wav
+edgescribe run meeting.wav
 
 # Save transcript to file
-EDGESCRIBE run meeting.wav -o transcript.txt
+edgescribe run meeting.wav -o transcript.txt
 ```
 
 ## Commands
@@ -65,130 +91,139 @@ EDGESCRIBE run meeting.wav -o transcript.txt
 
 | Command | Description |
 |---------|-------------|
-| `EDGESCRIBE pull <model>` | Download a model from HuggingFace |
-| `EDGESCRIBE list` | List available and downloaded models |
-| `EDGESCRIBE remove <model>` | Delete a downloaded model |
+| `edgescribe pull <model>` | Download a model from HuggingFace |
+| `edgescribe list` | List available and downloaded models |
+| `edgescribe remove <model>` | Delete a downloaded model |
 
 ### Speech-to-Text (ASR)
 
 | Command | Description |
 |---------|-------------|
-| `EDGESCRIBE run --live` | Live microphone transcription |
-| `EDGESCRIBE run <file.wav>` | Transcribe a WAV file |
-| `EDGESCRIBE run <file> -o out.txt` | Transcribe and save to file |
-| `EDGESCRIBE devices` | List audio input devices |
+| `edgescribe run --live` | Live microphone transcription |
+| `edgescribe run <file.wav>` | Transcribe a WAV file |
+| `edgescribe run <file> -o out.txt` | Transcribe and save to file |
+| `edgescribe devices` | List audio input devices |
 
 ```bash
 # Live transcription — speaks into mic, text streams to terminal
-EDGESCRIBE run --live
+edgescribe run --live
 
 # Live transcription with a specific model path
-EDGESCRIBE run --live --model /path/to/custom/model
+edgescribe run --live --model /path/to/custom/model
 
 # Transcribe a WAV file
-EDGESCRIBE run meeting.wav
+edgescribe run meeting.wav
 
 # Transcribe and save output
-EDGESCRIBE run meeting.wav -o transcript.txt
+edgescribe run meeting.wav -o transcript.txt
 
 # Use a specific model
-EDGESCRIBE run meeting.wav --model nemotron
+edgescribe run meeting.wav --model nemotron
 ```
 
 ### Vision & OCR
 
 | Command | Description |
 |---------|-------------|
-| `EDGESCRIBE vision <image>` | Describe an image |
-| `EDGESCRIBE vision <image> --prompt "..."` | Analyze with custom prompt |
-| `EDGESCRIBE vision <image> --ocr` | Extract text from image (OCR) |
-| `EDGESCRIBE vision <image> -o out.txt` | Save analysis to file |
+| `edgescribe vision <image>` | Describe an image |
+| `edgescribe vision <image> --prompt "..."` | Analyze with custom prompt |
+| `edgescribe vision <image> --ocr` | Extract text from image (OCR) |
+| `edgescribe vision <image> -o out.txt` | Save analysis to file |
 
 ```bash
 # Describe an image
-EDGESCRIBE vision photo.jpg
+edgescribe vision photo.jpg
 
 # OCR — extract text from a document photo
-EDGESCRIBE vision prescription.jpg --ocr
+edgescribe vision prescription.jpg --ocr
 
 # Analyze with a specific prompt
-EDGESCRIBE vision xray.jpg --prompt "Describe any abnormalities"
+edgescribe vision xray.jpg --prompt "Describe any abnormalities"
 
 # Save output to file
-EDGESCRIBE vision chart.jpg --ocr -o extracted.txt
+edgescribe vision chart.jpg --ocr -o extracted.txt
 
 # Use a specific model
-EDGESCRIBE vision scan.png --model /path/to/qwen3-vl
+edgescribe vision scan.png --model /path/to/qwen3-vl
 ```
 
 ### LLM Chat
 
 | Command | Description |
 |---------|-------------|
-| `EDGESCRIBE chat "<prompt>"` | Chat with the local language model |
-| `EDGESCRIBE chat "<prompt>" -o out.txt` | Save response to file |
+| `edgescribe chat` | Interactive multi-turn chat (type `/exit` to quit) |
+| `edgescribe chat "<prompt>"` | Single-turn chat with the local language model |
+| `edgescribe chat "<prompt>" -o out.txt` | Save response to file |
 
 ```bash
-# Ask a question
-EDGESCRIBE chat "What are the side effects of metformin?"
+# Interactive multi-turn chat (remembers conversation context)
+edgescribe chat
+# You: What are the side effects of metformin?
+# Assistant: Common side effects include nausea, diarrhea...
+# You: What about for patients with kidney disease?
+# Assistant: For patients with renal impairment, metformin...
+# You: /exit
+
+# Single-turn question
+edgescribe chat "What are the side effects of metformin?"
 
 # Save response
-EDGESCRIBE chat "Summarize diabetes treatment guidelines" -o summary.txt
+edgescribe chat "Summarize diabetes treatment guidelines" -o summary.txt
 
-# Use a specific model
-EDGESCRIBE chat "Hello" --model /path/to/model
+# Save full conversation from interactive mode
+edgescribe chat -o conversation.txt
 ```
 
 ### Post-Processing
 
 | Command | Description |
 |---------|-------------|
-| `EDGESCRIBE process --soap <file>` | Generate SOAP notes from transcript |
-| `EDGESCRIBE process --summarize <file>` | Summarize text |
-| `EDGESCRIBE process --fix-terms <file>` | Fix medical terminology errors |
-| `EDGESCRIBE process --soap <file> --image <img>` | SOAP notes with image context |
+| `edgescribe process --soap <file>` | Generate SOAP notes from transcript |
+| `edgescribe process --summarize <file>` | Summarize text |
+| `edgescribe process --fix-terms <file>` | Fix medical terminology errors |
+| `edgescribe process --soap <file> --image <img>` | SOAP notes with image context |
 
 ```bash
 # Generate SOAP notes from a transcript
-EDGESCRIBE process --soap transcript.txt
+edgescribe process --soap transcript.txt
 
 # Generate SOAP notes with an attached image
-EDGESCRIBE process --soap transcript.txt --image xray.jpg
+edgescribe process --soap transcript.txt --image xray.jpg
 
 # Summarize a document
-EDGESCRIBE process --summarize meeting_notes.txt
+edgescribe process --summarize meeting_notes.txt
 
 # Fix medical terminology in a transcript
-EDGESCRIBE process --fix-terms raw_transcript.txt
+edgescribe process --fix-terms raw_transcript.txt
 
 # Save output
-EDGESCRIBE process --soap transcript.txt -o soap_notes.txt
+edgescribe process --soap transcript.txt -o soap_notes.txt
 ```
 
 ### Text-to-Speech
 
 | Command | Description |
 |---------|-------------|
-| `EDGESCRIBE speak "<text>"` | Read text aloud through speakers |
-| `EDGESCRIBE speak <file.txt>` | Read a text file aloud |
-| `EDGESCRIBE speak "<text>" -o out.wav` | Save speech to WAV file |
-| `EDGESCRIBE speak --voices` | List available voices |
+| `edgescribe speak "<text>"` | Read text aloud through speakers |
+| `edgescribe speak <file.txt>` | Read a text file aloud |
+| `edgescribe speak "<text>" -o out.wav` | Save speech to WAV file |
+| `edgescribe speak --voices` | List available voices |
 
 ```bash
 # Speak text aloud
-EDGESCRIBE speak "The patient presents with acute bronchitis."
+edgescribe speak "The patient presents with acute bronchitis."
 
 # Read a file aloud
-EDGESCRIBE speak soap_notes.txt
+edgescribe speak soap_notes.txt
 
 # Save to WAV file
-EDGESCRIBE speak "Hello world" -o greeting.wav
+edgescribe speak "Hello world" -o greeting.wav
 
 # Use a specific voice and speed
-EDGESCRIBE speak "Hello" --voice af_heart --speed 1.2
+edgescribe speak "Hello" --voice af_heart --speed 1.2
 
 # List available voices
-EDGESCRIBE speak --voices
+edgescribe speak --voices
 ```
 
 ## Global Options
@@ -214,10 +249,10 @@ EDGESCRIBE speak --voices
 
 | Model | Type | Size | Description |
 |-------|------|------|-------------|
-| `nemotron` | ASR | ~670 MB | Real-time English speech-to-text (Parakeet TDT 0.6B) |
-| `qwen3-vl` | VLM | ~1.5 GB | Vision + language — OCR, SOAP notes (Qwen3-VL-2B INT4) |
-| `kokoro` | TTS | ~300 MB | Text-to-speech with natural voices |
-| | | **~2.5 GB** | **Total for full AI suite** |
+| `nemotron` | ASR | ~670 MB | Real-time English speech-to-text (Parakeet TDT 0.6B, ONNX) |
+| `qwen3-vl` | VLM | ~990 MB | Vision + language — OCR, SOAP notes (Qwen3-VL-2B Q4_K_M, GGUF) |
+| `kokoro` | TTS | ~300 MB | Text-to-speech with natural voices (ONNX) |
+| | | **~1.96 GB** | **Total for full AI suite** |
 
 Models are downloaded from HuggingFace and cached locally at:
 - **Windows**: `%LOCALAPPDATA%\EDGESCRIBE\models\`
@@ -227,10 +262,11 @@ Override with `EDGESCRIBE_MODEL_DIR` environment variable.
 
 ### Using a Custom Model
 
-You can point to any local model directory containing a `genai_config.json`:
+You can point to any local model directory (for ONNX models) or GGUF file (for LLM/Vision):
 
 ```bash
-EDGESCRIBE run --live --model /path/to/my/custom/model
+edgescribe run --live --model /path/to/my/custom/model
+edgescribe chat "Hello" --model /path/to/model.gguf
 ```
 
 ## Building from Source
@@ -239,7 +275,10 @@ EDGESCRIBE run --live --model /path/to/my/custom/model
 
 - CMake 3.18+
 - C++20 compiler (MSVC 2022, Clang 14+, GCC 12+)
-- onnxruntime-genai headers and libraries
+- onnxruntime-genai headers and libraries (for ASR + TTS)
+- llama.cpp headers and libraries (for LLM + Vision)
+
+See [doc/llama-cpp-integration.md](doc/llama-cpp-integration.md) for detailed setup.
 
 ### Build
 
@@ -254,7 +293,8 @@ curl -sL -o include/miniaudio.h https://raw.githubusercontent.com/mackron/miniau
 
 # Configure and build
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
-  -DORT_GENAI_PATH=/path/to/onnxruntime-genai
+  -DORT_GENAI_PATH=/path/to/onnxruntime-genai \
+  -DLLAMA_CPP_PATH=/path/to/llama.cpp/install
 cmake --build build --config Release
 ```
 
@@ -264,12 +304,17 @@ If you've built onnxruntime-genai from source:
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
-  -DORT_GENAI_PATH=/path/to/onnxruntime-genai/build/Windows/Release
+  -DORT_GENAI_PATH=/path/to/onnxruntime-genai/build/Windows/Release \
+  -DLLAMA_CPP_PATH=/path/to/llama.cpp/install
 ```
 
 The `ORT_GENAI_PATH` should contain:
 - `include/` with `ort_genai.h` and `ort_genai_c.h`
 - `lib/` with the native libraries (`.dll` / `.dylib` / `.so`)
+
+The `LLAMA_CPP_PATH` should contain:
+- `include/` with `llama.h`
+- `lib/` with the llama library
 
 ## REST API Server
 
@@ -277,13 +322,13 @@ Start the API server to integrate with any frontend:
 
 ```bash
 # Start on default port 8080
-EDGESCRIBE serve
+edgescribe serve
 
 # Custom port
-EDGESCRIBE serve --port 3000
+edgescribe serve --port 3000
 
 # Specify which models to load
-EDGESCRIBE serve --asr-model /path/to/nemotron --vlm-model /path/to/qwen3-vl
+edgescribe serve --asr-model /path/to/nemotron --vlm-model /path/to/qwen3-vl
 ```
 
 ### API Endpoints
@@ -379,10 +424,12 @@ console.log(data.text);
 
 ```
 EDGESCRIBE (C++, MIT)
-├── onnxruntime-genai     # Inference engine for ASR, LLM, VLM (MIT)
+├── llama.cpp             # Inference engine for LLM + Vision (MIT)
+├── onnxruntime-genai     # Inference engine for ASR (MIT)
 ├── onnxruntime           # Inference engine for TTS (MIT)
 ├── miniaudio.h           # Cross-platform audio capture + playback (Public Domain)
-└── ONNX models           # From HuggingFace (open weights)
+├── GGUF models           # LLM/Vision from HuggingFace (open weights)
+└── ONNX models           # ASR/TTS from HuggingFace (open weights)
 ```
 
 ```
@@ -393,10 +440,10 @@ src/
 │   ├── transcriber.h/cpp       ── StreamingProcessor + Generator pipeline
 │   ├── audio_capture.h/cpp     ── Microphone input (miniaudio)
 │   └── audio_file.h/cpp        ── WAV file loader
-├── llm/                        # Language Model (Qwen3-VL text mode)
+├── llm/                        # Language Model (Qwen3-VL text mode, llama.cpp)
 │   └── llm_engine.h/cpp        ── Chat, SOAP notes, summarize, fix terms
-├── vision/                     # Vision + OCR (Qwen3-VL vision mode)
-│   └── vision_engine.h/cpp     ── MultiModalProcessor, OCR, image analysis
+├── vision/                     # Vision + OCR (Qwen3-VL vision mode, llama.cpp)
+│   └── vision_engine.h/cpp     ── CLIP + llama.cpp, OCR, image analysis
 └── tts/                        # Text-to-Speech (Kokoro ONNX)
     └── tts_engine.h/cpp        ── ONNX Runtime C++ API, audio playback
 ```
@@ -404,10 +451,10 @@ src/
 ### Data Flow
 
 ```
-🎤 ASR:    Mic/WAV → StreamingProcessor → Generator → TokenizerStream → text
-🧠 LLM:    Prompt → Tokenizer → Generator → TokenizerStream → text
-🖼️ Vision: Image+Prompt → MultiModalProcessor → Generator → text
-🔊 TTS:    Text → Tokenizer → ONNX Runtime Session → PCM audio → speaker/WAV
+🎤 ASR:    Mic/WAV → StreamingProcessor → Generator → TokenizerStream → text  (onnxruntime-genai)
+🧠 LLM:    Prompt → llama_tokenize → llama_decode → llama_sampler → text     (llama.cpp)
+🖼️ Vision: Image+Prompt → CLIP encoder → llama_decode → text                  (llama.cpp)
+🔊 TTS:    Text → Phonemizer → ONNX Runtime Session → PCM audio → speaker    (onnxruntime)
 ```
 
 ## Privacy & Security
@@ -420,24 +467,65 @@ src/
 
 ## Roadmap
 
+### v1.0 — Core AI Suite (Current)
+
+Ship the foundation: on-device ASR + LLM + Vision + TTS in a single binary, zero cloud dependencies.
+
 - [x] CLI tool with `pull` / `run` / `list` commands
 - [x] Live microphone transcription
 - [x] WAV file transcription
-- [x] Cross-platform builds (Windows, macOS, Linux)
-- [x] LLM chat (`EDGESCRIBE chat`)
-- [x] Vision & OCR (`EDGESCRIBE vision`)
-- [x] SOAP notes / summarize / fix terms (`EDGESCRIBE process`)
-- [x] Text-to-speech (`EDGESCRIBE speak`)
+- [x] Cross-platform builds (Windows x64, macOS ARM64)
+- [x] LLM chat (`edgescribe chat`) with multi-turn support
+- [x] Vision & OCR (`edgescribe vision`)
+- [x] SOAP notes / summarize / fix terms (`edgescribe process`)
+- [x] Text-to-speech (`edgescribe speak`)
 - [x] Windows installer (Inno Setup, auto-adds to PATH)
 - [x] Proper G2P phonemizer for TTS (espeak-ng or misaki ONNX)
-- [x] Local REST API server (`EDGESCRIBE serve`)
-- [ ] Web dashboard UI
-- [ ] Speaker diarization
+- [x] Local REST API server (`edgescribe serve`)
+- [x] GPU acceleration — Vulkan (Windows) and Metal (macOS), auto-detect with CPU fallback
+- [x] SQLite persistent memory — auto-save chat + process history
+- [x] `edgescribe history` — list, show, search, delete past sessions
+
+### v1.1 — Transcription Quality + Performance
+
+Improve ASR output quality and optimize multi-turn chat performance.
+
+- [ ] KV cache reuse for multi-turn chat (skip re-processing cached tokens)
+- [ ] DirectML (Windows) / CoreML (macOS) for ASR/TTS acceleration
+- [ ] Speaker diarization (who said what)
 - [ ] Word-level timestamps
 - [ ] SRT/VTT subtitle export
-- [ ] GPU acceleration (CUDA, DirectML, Metal)
+- [ ] Web dashboard UI
+
+### v1.2 — Knowledge Base (RAG)
+
+Let users ingest their own documents (research reports, clinical guidelines, protocols) and query against them. LLM answers grounded in user's content.
+
+- [ ] Document ingestion with text chunking (TXT, CSV, MD)
+- [ ] FTS5 search on knowledge base chunks
+- [ ] RAG-augmented LLM prompts (auto-retrieve relevant context)
+- [ ] `edgescribe kb` CLI commands (add, list, search, remove)
+- [ ] REST API endpoints for KB (`/v1/kb/*`)
+
+### v1.3 — Semantic Search
+
+Add a dedicated embedding model for similarity-based retrieval, improving search quality beyond keyword matching.
+
+- [ ] `all-MiniLM-L6-v2` ONNX embedding model (~80 MB, 384-dim vectors)
+- [ ] Brute-force cosine similarity search in C++ (<1ms for 10K entries)
+- [ ] Embed chunks on ingestion, store as BLOBs in SQLite
+- [ ] Hybrid search (FTS5 keywords + cosine similarity)
+- [ ] `edgescribe pull embeddings` to download model
+
+### Future
+
+- [ ] CUDA acceleration (NVIDIA-specific optimized build)
 - [ ] Multiple languages
 - [ ] Package managers (winget, brew, apt)
+- [ ] Configurable context window (`--context 8192` / `--context 32768`)
+- [ ] KV cache quantization (Q8_0) for lower memory usage
+- [ ] PDF/DOCX ingestion for knowledge base
+- [ ] Specialty LoRA adapters (cardiology, dermatology, psychiatry, etc.)
 
 ## License
 
@@ -445,7 +533,8 @@ MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-- [ONNX Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) — ASR, LLM, VLM inference
+- [llama.cpp](https://github.com/ggerganov/llama.cpp) — LLM and Vision inference (GGUF)
+- [ONNX Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) — ASR inference
 - [ONNX Runtime](https://github.com/microsoft/onnxruntime) — TTS inference
 - [miniaudio](https://github.com/mackron/miniaudio) — Cross-platform audio
 - [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) — ASR model

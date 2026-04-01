@@ -1,5 +1,5 @@
 // EDGESCRIBE — LLM Engine
-// Wraps onnxruntime-genai for text generation (chat, SOAP notes, summarization)
+// Wraps llama.cpp for text generation (chat, SOAP notes, summarization)
 
 #pragma once
 
@@ -8,10 +8,9 @@
 #include <string>
 #include <vector>
 
-// Forward declarations
-struct OgaModel;
-struct OgaTokenizer;
-struct OgaTokenizerStream;
+struct llama_model;
+struct llama_context;
+struct llama_sampler;
 
 namespace EDGESCRIBE::llm {
 
@@ -28,6 +27,9 @@ class LlmEngine {
   explicit LlmEngine(const std::string& model_path,
                      const std::string& device = "cpu");
   ~LlmEngine();
+
+  LlmEngine(const LlmEngine&) = delete;
+  LlmEngine& operator=(const LlmEngine&) = delete;
 
   // Generate text from a raw prompt (no chat template)
   std::string Generate(const std::string& prompt,
@@ -57,6 +59,9 @@ class LlmEngine {
   std::string FixMedicalTerms(const std::string& transcript,
                               TokenCallback on_token = nullptr);
 
+  // Invalidate KV cache (call on new conversation, system prompt change)
+  void InvalidateCache();
+
  private:
   std::string RunGeneration(const std::string& formatted_prompt,
                             int max_length,
@@ -64,9 +69,18 @@ class LlmEngine {
 
   std::string FormatChatMessages(const std::vector<ChatMessage>& messages);
 
-  std::unique_ptr<OgaModel> model_;
-  std::unique_ptr<OgaTokenizer> tokenizer_;
+  int FindCommonPrefix(const std::vector<int>& cached,
+                       const std::vector<int>& current);
+
+  llama_model* model_ = nullptr;
+  llama_context* ctx_ = nullptr;
+  llama_sampler* sampler_ = nullptr;
   std::string model_path_;
+  int n_ctx_ = 4096;
+
+  // KV cache tracking for prompt caching
+  std::vector<int> cached_tokens_;
+  bool cache_valid_ = false;
 };
 
 }  // namespace EDGESCRIBE::llm

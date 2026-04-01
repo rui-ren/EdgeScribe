@@ -29,8 +29,10 @@ class ModelManager {
   ModelManager();
   ~ModelManager();
 
-  // Download a model from HuggingFace
-  void Pull(const std::string& model_name, ProgressCallback progress = nullptr);
+  // Download a model from HuggingFace (token optional, for gated/private models)
+  void Pull(const std::string& model_name,
+            const std::string& token = "",
+            ProgressCallback progress = nullptr);
 
   // Get the local path to a cached model
   std::string GetModelPath(const std::string& model_name) const;
@@ -59,8 +61,9 @@ class ModelManager {
   // Get model info from manifest
   ModelInfo GetModelInfo(const std::string& model_name) const;
 
-  // Download a single file from HuggingFace
+  // Download a single file from HuggingFace (with optional auth token)
   void DownloadFile(const std::string& url, const std::string& dest_path,
+                    const std::string& token = "",
                     ProgressCallback progress = nullptr);
 };
 

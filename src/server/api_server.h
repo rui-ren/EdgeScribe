@@ -1,6 +1,6 @@
 // EDGESCRIBE — REST API Server
 // Exposes all EDGESCRIBE engines via a local HTTP API
-// Usage: EDGESCRIBE serve --port 8080
+// Usage: edgescribe serve --port 8080
 
 #pragma once
 

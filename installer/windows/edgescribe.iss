@@ -41,9 +41,21 @@ Source: "build\Release\EDGESCRIBE.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\Release\onnxruntime-genai.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\Release\onnxruntime.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\Release\onnxruntime_providers_shared.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "build\Release\WebView2Loader.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+; Web UI (served by the built-in HTTP server)
+Source: "www\*"; DestDir: "{app}\www"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Docs
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+; Desktop shortcut — launches the native GUI window
+Name: "{userdesktop}\EDGESCRIBE"; Filename: "{app}\{#MyAppExeName}"; Parameters: "gui"; \
+  Comment: "Open EDGESCRIBE AI Assistant"
+; Start menu shortcut
+Name: "{group}\EDGESCRIBE"; Filename: "{app}\{#MyAppExeName}"; Parameters: "gui"; \
+  Comment: "Open EDGESCRIBE AI Assistant"
+Name: "{group}\Uninstall EDGESCRIBE"; Filename: "{uninstallexe}"
 
 [Registry]
 ; Add install dir to user PATH (no admin needed)
@@ -51,15 +63,15 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
   ValueData: "{olddata};{app}"; Check: NeedsAddPath(ExpandConstant('{app}'))
 
 [Run]
-; After install, show a quick message
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--version"; \
-  Flags: nowait postinstall skipifsilent runhidden
+; After install, launch the GUI app
+Filename: "{app}\{#MyAppExeName}"; Parameters: "gui"; \
+  Description: "Launch EDGESCRIBE"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 
 [Messages]
-FinishedLabel=EDGESCRIBE has been installed. Open any terminal and run:%n%n  EDGESCRIBE pull nemotron%n  EDGESCRIBE run --live%n%nYou may need to restart your terminal for PATH changes to take effect.
+FinishedLabel=EDGESCRIBE has been installed!%n%nYou can launch it from:%n  • The desktop shortcut%n  • The Start Menu%n  • Any terminal: edgescribe gui%n%nFirst time? Run this in a terminal to download the AI models:%n  edgescribe pull nemotron%n  edgescribe pull qwen3-vl
 
 [Code]
 // Check if the path already contains our directory
