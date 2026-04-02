@@ -108,6 +108,7 @@ export async function init() {
   setupLiveTranscription();
   setupFileTranscription();
   setupChat();
+  setupMedicalNotes();
   setupVision();
   setupTTS();
   setupKeyboardShortcuts();
@@ -444,7 +445,7 @@ function setupChat() {
       if (preview) preview.style.display = 'none';
       inputEl.placeholder = 'Type a message and press Enter to send...';
     } else {
-      // Text-only chat mode
+      // Text-only chat mode — streaming
       appendMessage(messagesEl, 'user', text);
       chatHistory.push({ role: 'user', content: text });
       updateContextIndicator();
@@ -454,15 +455,43 @@ function setupChat() {
       contentEl.classList.add('streaming');
       contentEl.textContent = '';
 
+      let streamedText = '';
+
       try {
-        const result = await api.chatMultiTurn(chatHistory);
+        // Try streaming endpoint first
+        const result = await api.chatStream(chatHistory, (token) => {
+          streamedText += token;
+          contentEl.textContent = streamedText;
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }, 2048, currentSessionId);
+
+        // Track the session ID from backend
+        if (result.session_id) currentSessionId = result.session_id;
+
         contentEl.classList.remove('streaming');
         contentEl.innerHTML = marked.parse(result.text);
         chatHistory.push({ role: 'assistant', content: result.text });
         updateContextIndicator();
+        loadSessionList();
       } catch (e) {
-        contentEl.classList.remove('streaming');
-        contentEl.textContent = '❌ Error: ' + e.message;
+        // Fall back to non-streaming if stream endpoint not available
+        if (streamedText) {
+          contentEl.classList.remove('streaming');
+          contentEl.textContent = '❌ Error: ' + e.message;
+        } else {
+          try {
+            const result = await api.chatMultiTurn(chatHistory);
+            if (result.session_id) currentSessionId = result.session_id;
+            contentEl.classList.remove('streaming');
+            contentEl.innerHTML = marked.parse(result.text);
+            chatHistory.push({ role: 'assistant', content: result.text });
+            updateContextIndicator();
+            loadSessionList();
+          } catch (e2) {
+            contentEl.classList.remove('streaming');
+            contentEl.textContent = '❌ Error: ' + e2.message;
+          }
+        }
       }
     }
   };
@@ -534,10 +563,10 @@ function setupChat() {
   });
 
   exportBtn?.addEventListener('click', () => {
-    const md = buildChatMarkdown(messagesEl);
-    if (!md) return;
-    downloadText(md, 'chat-export.md');
-    showToast('Chat saved as Markdown!', 'success');
+    const messages = messagesEl.querySelectorAll('.message');
+    if (!messages.length) return;
+    exportChatAsWord(messages);
+    showToast('Chat saved as Word document!', 'success');
   });
 
   // PDF export via print window
@@ -582,10 +611,33 @@ function appendMessage(container, role, text) {
   const contentHtml = role === 'assistant' && text
     ? marked.parse(text)
     : escapeHtml(text);
+  const actionBtns = role === 'assistant'
+    ? '<div class="msg-actions"><button class="msg-action-btn msg-copy-btn" title="Copy">📋</button><button class="msg-action-btn msg-tts-btn" title="Read aloud">🔊</button></div>'
+    : '';
   div.innerHTML = `
     <div class="message-avatar ${role}">${role === 'user' ? '👤' : '🤖'}</div>
     <div class="message-content ${role === 'assistant' ? 'markdown-body' : ''}">${contentHtml}</div>
+    ${actionBtns}
   `;
+  // Wire up action buttons
+  const copyBtn = div.querySelector('.msg-copy-btn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      const msgText = div.querySelector('.message-content')?.textContent?.trim();
+      if (msgText) {
+        navigator.clipboard.writeText(msgText);
+        copyBtn.textContent = '✓';
+        setTimeout(() => { copyBtn.textContent = '📋'; }, 1200);
+      }
+    });
+  }
+  const ttsBtn = div.querySelector('.msg-tts-btn');
+  if (ttsBtn) {
+    ttsBtn.addEventListener('click', () => {
+      const msgText = div.querySelector('.message-content')?.textContent?.trim();
+      if (msgText) readAloud(msgText, ttsBtn);
+    });
+  }
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
   return div;
@@ -779,6 +831,261 @@ async function searchSessions(query) {
   }
 }
 
+// ── Medical Notes ──
+function setupMedicalNotes() {
+  const dropZone = document.getElementById('notes-drop-zone');
+  const fileInput = document.getElementById('notes-file-input');
+  const textInput = document.getElementById('notes-text-input');
+  const analyzeBtn = document.getElementById('notes-analyze');
+  const resultCard = document.getElementById('notes-result-card');
+  const resultEl = document.getElementById('notes-result');
+  const copyBtn = document.getElementById('notes-copy');
+  const exportBtn = document.getElementById('notes-export');
+  const readAloudBtn = document.getElementById('notes-read-aloud');
+
+  if (!analyzeBtn) return;
+
+  // Drop zone
+  dropZone?.addEventListener('click', () => fileInput?.click());
+  dropZone?.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone?.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone?.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) loadNotesFile(e.dataTransfer.files[0]);
+  });
+
+  fileInput?.addEventListener('change', () => {
+    if (fileInput.files.length) loadNotesFile(fileInput.files[0]);
+  });
+
+  function loadNotesFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      textInput.value = reader.result;
+      showToast('File loaded: ' + file.name, 'success');
+    };
+    reader.readAsText(file);
+  }
+
+  // Analysis type selection
+  document.querySelectorAll('.notes-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      document.querySelectorAll('.notes-option').forEach(o => o.classList.remove('active'));
+      opt.classList.add('active');
+    });
+  });
+
+  // Analyze
+  // Max chars per chunk (~8K chars ≈ ~2K tokens, leaves room for prompt + response)
+  const CHUNK_SIZE = 8000;
+  const CHUNK_OVERLAP = 200;
+
+  function splitIntoChunks(text) {
+    if (text.length <= CHUNK_SIZE) return [text];
+    const chunks = [];
+    let start = 0;
+    while (start < text.length) {
+      let end = Math.min(start + CHUNK_SIZE, text.length);
+      // Try to break at a paragraph or sentence boundary
+      if (end < text.length) {
+        const lastPara = text.lastIndexOf('\n\n', end);
+        const lastNewline = text.lastIndexOf('\n', end);
+        const lastPeriod = text.lastIndexOf('. ', end);
+        if (lastPara > start + CHUNK_SIZE * 0.5) end = lastPara;
+        else if (lastNewline > start + CHUNK_SIZE * 0.5) end = lastNewline;
+        else if (lastPeriod > start + CHUNK_SIZE * 0.5) end = lastPeriod + 1;
+      }
+      chunks.push(text.slice(start, end).trim());
+      start = end - CHUNK_OVERLAP;
+    }
+    return chunks.filter(c => c.length > 0);
+  }
+
+  async function analyzeChunk(chunkText, prompt, systemPrompt, chunkLabel) {
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: prompt + chunkText }
+    ];
+    try {
+      const result = await api.chatStream(messages, () => {});
+      return result.text;
+    } catch {
+      const result = await api.chat(prompt + chunkText, systemPrompt);
+      return result.text;
+    }
+  }
+
+  analyzeBtn.addEventListener('click', async () => {
+    const text = textInput?.value?.trim();
+    if (!text) {
+      showToast('Please paste or upload a document first.', 'info');
+      return;
+    }
+
+    const activeOption = document.querySelector('.notes-option.active');
+    const analysisType = activeOption?.dataset?.type || 'summary';
+
+    const prompts = {
+      summary: 'Analyze the following clinical document section. Provide a structured summary with these sections:\n\n' +
+        '## Key Findings\n## Diagnoses\n## Medications\n## Procedures\n## Recommendations\n\n' +
+        'Be concise and use bullet points. Only include sections that are relevant.\n\nDocument section:\n',
+      medications: 'Extract ALL medications mentioned in this clinical document section. For each medication, list:\n\n' +
+        '- **Medication name**\n- **Dosage** (if mentioned)\n- **Frequency/Route** (if mentioned)\n- **Purpose** (if mentioned)\n\n' +
+        'Format as a clear list. If dosage or frequency is not mentioned, write "Not specified".\n\nDocument section:\n',
+      diagnoses: 'Extract all diagnoses, conditions, and procedures from this clinical document section. Organize into:\n\n' +
+        '## Diagnoses / Conditions\n## Procedures Performed\n## Lab Results (if any)\n## Referrals (if any)\n\n' +
+        'Use bullet points. Include ICD codes if mentioned.\n\nDocument section:\n',
+      soap: 'Extract clinical information from this document section for SOAP note format. Organize into:\n\n' +
+        '## Subjective\n## Objective\n## Assessment\n## Plan\n\n' +
+        'If a section has no relevant data, skip it.\n\nDocument section:\n',
+    };
+
+    const mergePrompts = {
+      summary: 'Below are summaries from different sections of the same clinical document. ' +
+        'Merge them into one unified summary. Remove duplicates, combine related findings, and organize into:\n\n' +
+        '## Key Findings\n## Diagnoses\n## Medications\n## Procedures\n## Recommendations\n\n' +
+        'Be concise. Only include sections that have content.\n\nSection summaries:\n',
+      medications: 'Below are medication lists extracted from different sections of the same document. ' +
+        'Merge them into one unified list. Remove duplicates (same medication mentioned in multiple sections).\n\n' +
+        'Section results:\n',
+      diagnoses: 'Below are diagnoses and procedures extracted from different sections of the same document. ' +
+        'Merge into one unified list. Remove duplicates.\n\nSection results:\n',
+      soap: 'Below are SOAP note extractions from different sections of the same clinical document. ' +
+        'Merge them into one unified SOAP note:\n\n' +
+        '## Subjective\n## Objective\n## Assessment\n## Plan\n\n' +
+        'Combine related items, remove duplicates.\n\nSection results:\n',
+    };
+
+    const systemPrompt = 'You are an expert medical document analyst. Extract and organize clinical information accurately. ' +
+      'Use clear formatting with headers and bullet points. Never fabricate information — only report what is in the document.';
+
+    analyzeBtn.textContent = '⏳ Analyzing...';
+    analyzeBtn.disabled = true;
+    resultCard.style.display = 'block';
+
+    const chunks = splitIntoChunks(text);
+    const totalChunks = chunks.length;
+
+    try {
+      if (totalChunks === 1) {
+        // Small document — single pass
+        resultEl.innerHTML = '<span class="placeholder">Analyzing document...</span>';
+        const messages = [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompts[analysisType] + text }
+        ];
+        let streamedText = '';
+        try {
+          const result = await api.chatStream(messages, (token) => {
+            streamedText += token;
+            resultEl.textContent = streamedText;
+          });
+          resultEl.innerHTML = marked.parse(result.text);
+        } catch {
+          if (!streamedText) {
+            const result = await api.chat(prompts[analysisType] + text, systemPrompt);
+            resultEl.innerHTML = marked.parse(result.text);
+          }
+        }
+      } else {
+        // Large document — chunk, analyze each, then merge
+        resultEl.innerHTML = `<span class="placeholder">Document is large (${totalChunks} sections). Analyzing section by section...</span>`;
+        const partialResults = [];
+
+        for (let i = 0; i < totalChunks; i++) {
+          resultEl.innerHTML = `<span class="placeholder">Analyzing section ${i + 1} of ${totalChunks}...</span>`;
+          analyzeBtn.textContent = `⏳ Section ${i + 1}/${totalChunks}...`;
+          const partial = await analyzeChunk(chunks[i], prompts[analysisType], systemPrompt);
+          partialResults.push(partial);
+        }
+
+        // Merge pass
+        resultEl.innerHTML = '<span class="placeholder">Merging results...</span>';
+        analyzeBtn.textContent = '⏳ Merging...';
+
+        const mergeInput = partialResults.map((r, i) => `--- Section ${i + 1} ---\n${r}`).join('\n\n');
+        const mergeMessages = [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: mergePrompts[analysisType] + mergeInput }
+        ];
+
+        let streamedText = '';
+        try {
+          const result = await api.chatStream(mergeMessages, (token) => {
+            streamedText += token;
+            resultEl.textContent = streamedText;
+          });
+          resultEl.innerHTML = marked.parse(result.text);
+        } catch {
+          if (!streamedText) {
+            const result = await api.chat(mergePrompts[analysisType] + mergeInput, systemPrompt);
+            resultEl.innerHTML = marked.parse(result.text);
+          }
+        }
+      }
+    } catch (e) {
+      resultEl.textContent = '❌ Error: ' + e.message;
+    }
+
+    analyzeBtn.textContent = '🔍 Analyze Document';
+    analyzeBtn.disabled = false;
+  });
+
+  // Copy
+  copyBtn?.addEventListener('click', () => {
+    const text = resultEl?.textContent?.trim();
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    showToast('Results copied!', 'success');
+  });
+
+  // Read aloud
+  readAloudBtn?.addEventListener('click', () => {
+    const text = resultEl?.textContent?.trim();
+    if (!text) return;
+    readAloud(text, readAloudBtn);
+  });
+
+  // Export as Word
+  exportBtn?.addEventListener('click', () => {
+    const content = resultEl?.innerHTML;
+    if (!content) return;
+
+    const date = new Date().toLocaleString();
+    const activeOption = document.querySelector('.notes-option.active strong');
+    const title = activeOption?.textContent || 'Medical Notes Analysis';
+
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" ` +
+      `xmlns:w="urn:schemas-microsoft-com:office:word" ` +
+      `xmlns="http://www.w3.org/TR/REC-html40">` +
+      `<head><meta charset="UTF-8">` +
+      `<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->` +
+      `<style>` +
+      `body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1a1a2e;max-width:700px;margin:40px auto;line-height:1.6;}` +
+      `h1{font-size:16pt;color:#4f46e5;border-bottom:2px solid #4f46e5;padding-bottom:6px;}` +
+      `h2{font-size:13pt;color:#1a1a2e;margin-top:18px;border-bottom:1px solid #ddd;padding-bottom:4px;}` +
+      `ul{margin:8px 0 8px 20px;} li{margin-bottom:4px;}` +
+      `strong{color:#1a1a2e;}` +
+      `table{border-collapse:collapse;width:100%;margin:10px 0;} th,td{border:1px solid #ddd;padding:6px 10px;} th{background:#f3f4f6;}` +
+      `</style></head><body>` +
+      `<h1>📋 ${title}</h1>` +
+      `<p style="color:#666;font-size:9pt;">Generated by EDGESCRIBE on ${date}</p>` +
+      `<hr style="border:none;border-top:1px solid #ddd;margin:12px 0;">` +
+      content +
+      `</body></html>`;
+
+    const blob = new Blob(['\ufeff' + html], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'medical-notes-analysis.doc';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Saved as Word document!', 'success');
+  });
+}
+
 // ── Vision ──
 function setupVision() {
   const imageInput = document.getElementById('vision-image-input');
@@ -788,8 +1095,20 @@ function setupVision() {
   const ocrBtn = document.getElementById('vision-ocr');
   const resultEl = document.getElementById('vision-result');
   const uploadBtn = document.getElementById('vision-upload-btn');
+  const actionsEl = document.getElementById('vision-actions');
+  const copyBtn = document.getElementById('vision-copy');
+  const readAloudBtn = document.getElementById('vision-read-aloud');
+  const toChatBtn = document.getElementById('vision-to-chat');
 
   if (!imageInput) return;
+
+  let lastVisionResult = '';
+
+  function showResult(text) {
+    lastVisionResult = text;
+    resultEl.innerHTML = marked.parse(text);
+    if (actionsEl) actionsEl.style.display = 'flex';
+  }
 
   uploadBtn?.addEventListener('click', () => imageInput.click());
   imageInput.addEventListener('change', () => {
@@ -804,10 +1123,11 @@ function setupVision() {
     if (!imageInput.files.length) { showToast('Please upload an image first.', 'info'); return; }
     const prompt = promptInput?.value || 'Describe this image in detail.';
     resultEl.innerHTML = '<span class="placeholder">Analyzing...</span>';
+    if (actionsEl) actionsEl.style.display = 'none';
     analyzeBtn.disabled = true;
     try {
       const result = await api.analyzeImage(imageInput.files[0], prompt);
-      resultEl.textContent = result.text;
+      showResult(result.text);
     } catch (e) {
       resultEl.textContent = '❌ Error: ' + e.message;
     }
@@ -817,14 +1137,53 @@ function setupVision() {
   ocrBtn?.addEventListener('click', async () => {
     if (!imageInput.files.length) { showToast('Please upload an image first.', 'info'); return; }
     resultEl.innerHTML = '<span class="placeholder">Extracting text...</span>';
+    if (actionsEl) actionsEl.style.display = 'none';
     ocrBtn.disabled = true;
     try {
       const result = await api.ocrImage(imageInput.files[0]);
-      resultEl.textContent = result.text;
+      showResult(result.text);
     } catch (e) {
       resultEl.textContent = '❌ Error: ' + e.message;
     }
     ocrBtn.disabled = false;
+  });
+
+  // Copy result
+  copyBtn?.addEventListener('click', () => {
+    if (!lastVisionResult) return;
+    navigator.clipboard.writeText(lastVisionResult);
+    showToast('Copied to clipboard!', 'success');
+  });
+
+  // Read aloud
+  readAloudBtn?.addEventListener('click', () => {
+    if (!lastVisionResult) return;
+    readAloud(lastVisionResult, readAloudBtn);
+  });
+
+  // Continue in Chat — inject the vision result as context
+  toChatBtn?.addEventListener('click', () => {
+    if (!lastVisionResult) return;
+    // Pre-fill the chat with the vision result as context
+    chatHistory.push({
+      role: 'user',
+      content: 'Here is the result from analyzing an image:\n\n' + lastVisionResult
+    });
+    chatHistory.push({
+      role: 'assistant',
+      content: 'I have the image analysis results. What would you like to know about them?'
+    });
+    // Navigate to chat
+    navigate('chat');
+    const messagesEl = document.getElementById('chat-messages');
+    if (messagesEl) {
+      appendMessage(messagesEl, 'user', 'Here is the result from analyzing an image:\n\n' + lastVisionResult);
+      appendMessage(messagesEl, 'assistant', 'I have the image analysis results. What would you like to know about them?');
+    }
+    const chatInput = document.getElementById('chat-input');
+    chatInput?.focus();
+    updateContextIndicator();
+    showToast('Image analysis added to chat — ask follow-up questions!', 'success');
   });
 }
 
@@ -1085,6 +1444,91 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Shared TTS helper — reads text aloud using the TTS engine
+let ttsAudioEl = null;
+async function readAloud(text, btn) {
+  if (!text || text.length < 2) return;
+  // Truncate very long text to avoid TTS timeout
+  const maxChars = 2000;
+  const toSpeak = text.length > maxChars ? text.substring(0, maxChars) + '...' : text;
+  const originalText = btn?.textContent;
+  if (btn) { btn.textContent = '⏳ Loading...'; btn.disabled = true; }
+  try {
+    const blob = await api.synthesize(toSpeak);
+    if (!ttsAudioEl) {
+      ttsAudioEl = new Audio();
+    }
+    ttsAudioEl.pause();
+    ttsAudioEl.src = URL.createObjectURL(blob);
+    ttsAudioEl.play();
+    if (btn) btn.textContent = '⏹ Stop';
+    ttsAudioEl.onended = () => {
+      if (btn) { btn.textContent = originalText; btn.disabled = false; }
+    };
+    // Allow stopping
+    if (btn) {
+      btn.disabled = false;
+      const stopHandler = () => {
+        ttsAudioEl.pause();
+        btn.textContent = originalText;
+        btn.removeEventListener('click', stopHandler);
+      };
+      btn.addEventListener('click', stopHandler, { once: true });
+    }
+  } catch (e) {
+    showToast('Could not read aloud: ' + e.message, 'error');
+    if (btn) { btn.textContent = originalText; btn.disabled = false; }
+  }
+}
+
+// Export chat as Word document (.doc)
+function exportChatAsWord(messages) {
+  const date = new Date().toLocaleString();
+  let body = '';
+
+  messages.forEach(msg => {
+    const isUser = !!msg.querySelector('.user');
+    const role = isUser ? 'You' : 'Assistant';
+    const color = isUser ? '#4f46e5' : '#059669';
+    const content = msg.querySelector('.message-content')?.innerHTML || '';
+
+    body += `<p style="margin-top:16px;margin-bottom:4px;">` +
+      `<b style="color:${color};">${role}</b></p>` +
+      `<div style="margin-bottom:12px;">${content}</div>`;
+  });
+
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" ` +
+    `xmlns:w="urn:schemas-microsoft-com:office:word" ` +
+    `xmlns="http://www.w3.org/TR/REC-html40">` +
+    `<head><meta charset="UTF-8">` +
+    `<!--[if gte mso 9]><xml><w:WordDocument>` +
+    `<w:View>Print</w:View></w:WordDocument></xml><![endif]-->` +
+    `<style>` +
+    `body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1a1a2e;` +
+    `max-width:700px;margin:40px auto;line-height:1.6;}` +
+    `h1{font-size:16pt;border-bottom:1px solid #ccc;padding-bottom:6px;}` +
+    `pre{background:#f3f4f6;padding:10px;border-radius:4px;font-family:Consolas,monospace;font-size:10pt;}` +
+    `code{background:#f3f4f6;padding:2px 4px;font-family:Consolas,monospace;font-size:10pt;}` +
+    `pre code{background:none;padding:0;}` +
+    `table{border-collapse:collapse;width:100%;}` +
+    `th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;}` +
+    `th{background:#f3f4f6;}` +
+    `</style></head><body>` +
+    `<h1>EDGESCRIBE Chat Export</h1>` +
+    `<p style="color:#666;font-size:9pt;">Exported on ${date}</p>` +
+    `<hr style="border:none;border-top:1px solid #ddd;margin:16px 0;">` +
+    body +
+    `</body></html>`;
+
+  const blob = new Blob(['\ufeff' + html], { type: 'application/msword' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'chat-export.doc';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function downloadText(text, filename) {

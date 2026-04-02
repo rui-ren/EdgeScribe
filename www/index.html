@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EDGESCRIBE — On-Device AI Assistant</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=3">
 </head>
 <body>
 
@@ -17,7 +17,7 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <div style="display:flex; align-items:center; justify-content:space-between;">
-        <h1>🩺 EDGESCRIBE</h1>
+        <h1>⚡ EDGESCRIBE</h1>
         <button class="theme-toggle" id="theme-toggle" title="Switch theme">🌙</button>
       </div>
       <div class="subtitle">Your private AI assistant</div>
@@ -31,11 +31,11 @@
 
       <div class="nav-section">Voice</div>
       <a class="nav-item" data-page="live">
-        <span class="icon">🎤</span>
+        <span class="icon">🎙️</span>
         <span>Record &amp; Transcribe</span>
       </a>
       <a class="nav-item" data-page="file">
-        <span class="icon">📁</span>
+        <span class="icon">🎵</span>
         <span>Upload Audio</span>
       </a>
 
@@ -45,13 +45,17 @@
         <span>Chat</span>
       </a>
       <a class="nav-item" data-page="vision">
-        <span class="icon">🖼️</span>
+        <span class="icon">🔍</span>
         <span>Image Analysis</span>
+      </a>
+      <a class="nav-item" data-page="notes">
+        <span class="icon">🩺</span>
+        <span>Medical Notes</span>
       </a>
 
       <div class="nav-section">Audio</div>
       <a class="nav-item" data-page="tts">
-        <span class="icon">🔊</span>
+        <span class="icon">🔉</span>
         <span>Read Aloud</span>
       </a>
 
@@ -123,6 +127,7 @@
             <button class="btn btn-lg quick-action" data-page="file">📁 Upload Audio File</button>
             <button class="btn btn-lg quick-action" data-page="chat">💬 Ask a Question</button>
             <button class="btn btn-lg quick-action" data-page="vision">🖼️ Analyze an Image</button>
+            <button class="btn btn-lg quick-action" data-page="notes">📋 Medical Notes</button>
           </div>
         </div>
 
@@ -269,7 +274,7 @@ Everything stays private — nothing is sent online.</div>
             </div>
             <div class="chat-actions">
               <button class="btn btn-sm" id="chat-copy" title="Copy entire conversation">📋 Copy</button>
-              <button class="btn btn-sm" id="chat-export" title="Save as Markdown file">📄 Export</button>
+              <button class="btn btn-sm" id="chat-export" title="Save as Word document">📄 Word</button>
               <button class="btn btn-sm" id="chat-export-pdf" title="Save as PDF">📑 PDF</button>
               <button class="btn btn-sm" id="chat-clear" title="Clear conversation">🗑 Clear</button>
               <span class="context-indicator" id="context-indicator" title="Estimated context usage">
@@ -312,13 +317,98 @@ Everything stays private — nothing is sent online.</div>
 
           <div>
             <div class="card" style="min-height: 300px;">
-              <h3 style="margin-bottom: 12px;">Result</h3>
-              <div id="vision-result" style="font-size: 14px; line-height: 1.7; white-space: pre-wrap;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h3>Result</h3>
+                <div class="btn-group" id="vision-actions" style="display: none;">
+                  <button class="btn btn-sm" id="vision-copy">📋 Copy</button>
+                  <button class="btn btn-sm" id="vision-read-aloud">🔊 Read Aloud</button>
+                  <button class="btn btn-sm" id="vision-to-chat">💬 Continue in Chat</button>
+                </div>
+              </div>
+              <div id="vision-result" class="markdown-body" style="font-size: 14px; line-height: 1.7;">
                 <span class="placeholder">Upload an image and click "Analyze" or "Extract Text" to get started.</span>
               </div>
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- ── Medical Notes ── -->
+    <div class="page" id="page-notes">
+      <div class="page-header">
+        <h2>📋 Medical Notes</h2>
+        <span class="desc">Upload clinical documents to extract key findings</span>
+      </div>
+      <div class="page-body" style="display: flex; flex-direction: column; gap: 18px;">
+
+        <!-- Document input -->
+        <div class="card">
+          <h3 style="margin-bottom: 12px;">Upload or Paste a Document</h3>
+          <div class="drop-zone" id="notes-drop-zone" style="padding: 32px 24px; margin-bottom: 12px;">
+            <div class="icon" style="font-size: 36px;">📄</div>
+            <div class="title">Drop a text file here, or click to browse</div>
+            <div class="subtitle">Supports .txt, .csv, and .md files</div>
+          </div>
+          <input type="file" id="notes-file-input" accept=".txt,.csv,.md,.text" style="display: none;">
+          <div style="text-align: center; color: var(--text-muted); font-size: 13px; margin-bottom: 10px;">— or paste text directly —</div>
+          <textarea class="textarea" id="notes-text-input" rows="6" placeholder="Paste clinical notes, discharge summaries, lab results, or any medical document here..."></textarea>
+        </div>
+
+        <!-- Analysis type selector -->
+        <div class="card">
+          <h3 style="margin-bottom: 12px;">What to extract</h3>
+          <div class="notes-analysis-options">
+            <label class="notes-option active" data-type="summary">
+              <input type="radio" name="notes-type" value="summary" checked>
+              <span class="notes-option-icon">📊</span>
+              <span class="notes-option-body">
+                <strong>Summary</strong>
+                <span>Key findings, diagnoses, and recommendations</span>
+              </span>
+            </label>
+            <label class="notes-option" data-type="medications">
+              <input type="radio" name="notes-type" value="medications">
+              <span class="notes-option-icon">💊</span>
+              <span class="notes-option-body">
+                <strong>Medications</strong>
+                <span>All medications, dosages, and frequencies</span>
+              </span>
+            </label>
+            <label class="notes-option" data-type="diagnoses">
+              <input type="radio" name="notes-type" value="diagnoses">
+              <span class="notes-option-icon">🩺</span>
+              <span class="notes-option-body">
+                <strong>Diagnoses &amp; Procedures</strong>
+                <span>Conditions, treatments, and procedures</span>
+              </span>
+            </label>
+            <label class="notes-option" data-type="soap">
+              <input type="radio" name="notes-type" value="soap">
+              <span class="notes-option-icon">📝</span>
+              <span class="notes-option-body">
+                <strong>SOAP Notes</strong>
+                <span>Reformat into Subjective, Objective, Assessment, Plan</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-lg" id="notes-analyze" style="align-self: flex-end;">🔍 Analyze Document</button>
+
+        <!-- Results -->
+        <div class="card" id="notes-result-card" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3>Results</h3>
+            <div class="btn-group">
+              <button class="btn btn-sm" id="notes-copy">📋 Copy</button>
+              <button class="btn btn-sm" id="notes-export">📄 Word</button>
+              <button class="btn btn-sm" id="notes-read-aloud">🔊 Read Aloud</button>
+            </div>
+          </div>
+          <div id="notes-result" class="markdown-body" style="font-size: 14px; line-height: 1.7;"></div>
+        </div>
+
       </div>
     </div>
 
@@ -481,7 +571,7 @@ Everything stays private — nothing is sent online.</div>
 
 <script src="js/lib/marked.min.js"></script>
 <script type="module">
-  import * as app from './js/app.js?v=7';
+  import * as app from './js/app.js?v=15';
   window.app = app;
 </script>
 

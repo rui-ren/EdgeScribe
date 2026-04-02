@@ -28,19 +28,44 @@
 
 ```powershell
 # Option A: Installer (recommended)
-# Download EDGESCRIBESetup.exe from Releases → run it
+# Download OpenScribeSetup.exe from Releases → run it
 # Installs to %LOCALAPPDATA%\Programs\EDGESCRIBE, adds to PATH
-# Creates a desktop shortcut that launches the native GUI
+# VC++ runtime installed automatically if needed
 
 # Option B: ZIP
 Expand-Archive openscribe-win-x64.zip -DestinationPath C:\edgescribe
-$env:PATH += ";C:\edgescribe\openscribe-win-x64"
+cd C:\edgescribe\openscribe-win-x64
 
-# Download models and run
-edgescribe pull nemotron
-edgescribe pull qwen3-vl
-edgescribe gui              # Opens native desktop window
-# or: edgescribe serve      # Opens browser-based UI at localhost:8080
+# If you get "VCRUNTIME140.dll not found" error, run the bundled installer:
+.\vc_redist_x64.exe /install /quiet
+
+# Download models and verify
+.\edgescribe.exe pull nemotron
+.\edgescribe.exe pull qwen3-vl
+
+# Start server with web UI
+.\edgescribe.exe serve --port 8080
+# Open http://localhost:8080 in browser
+```
+
+### What's in the ZIP
+
+```
+openscribe-win-x64/
+├── edgescribe.exe              (1 MB)     Application binary
+├── llama.dll                   (2 MB)     LLM + Vision (llama.cpp)
+├── ggml-vulkan.dll            (54 MB)     GPU acceleration (auto-fallback to CPU)
+├── ggml-cpu.dll                (1 MB)     CPU backend
+├── ggml-base.dll               (0.5 MB)   Core tensor ops
+├── ggml.dll                    (0.1 MB)   Backend loader
+├── mtmd.dll                    (0.7 MB)   Vision/multimodal
+├── onnxruntime.dll            (13.5 MB)   TTS runtime
+├── onnxruntime-genai.dll       (2.3 MB)   ASR runtime
+├── onnxruntime_providers_shared.dll
+├── vc_redist_x64.exe          (24 MB)     VC++ runtime (run if DLL errors)
+├── www/                                   Web frontend UI
+├── README.md
+└── LICENSE
 ```
 
 ### macOS

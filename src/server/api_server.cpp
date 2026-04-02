@@ -560,8 +560,25 @@ void ApiServer::Impl::RegisterRoutes() {
         std::lock_guard<std::mutex> lock(llm_mutex);
         std::string result = llm->Chat(messages, max_length);
 
+        // Auto-save to memory
+        std::string session_id = ExtractJsonString(req.body, "session_id");
+        if (memory) {
+          try {
+            if (session_id.empty()) {
+              session_id = memory->StartSession("chat");
+            }
+            // Save the last user message and the assistant response
+            for (const auto& m : messages) {
+              if (m.role == "system") continue;
+              memory->SaveMessage(session_id, m.role, m.content);
+            }
+            memory->SaveMessage(session_id, "assistant", result);
+          } catch (...) {}
+        }
+
         auto body = JsonObj({
             {"text", JsonStr(result)},
+            {"session_id", JsonStr(session_id)},
         });
         res.set_content(body, "application/json");
       } catch (const std::exception& e) {
@@ -610,6 +627,88 @@ void ApiServer::Impl::RegisterRoutes() {
       res.set_content(JsonObj({{"error", JsonStr(e.what())}}),
                       "application/json");
     }
+  });
+
+  // ── POST /v1/chat/stream — Streaming chat (SSE) ──
+  svr.Post("/v1/chat/stream",
+           [this](const httplib::Request& req, httplib::Response& res) {
+    if (!EnsureLLM(res)) return;
+
+    int max_length = static_cast<int>(
+        ExtractJsonNumber(req.body, "max_length", 2048));
+
+    auto messages = ExtractJsonMessages(req.body);
+    std::string prompt = ExtractJsonString(req.body, "prompt");
+    std::string system = ExtractJsonString(req.body, "system");
+    std::string session_id = ExtractJsonString(req.body, "session_id");
+
+    if (messages.empty() && prompt.empty()) {
+      res.status = 400;
+      res.set_content(
+          JsonObj({{"error", JsonStr("Missing 'prompt' or 'messages'")}}),
+          "application/json");
+      return;
+    }
+
+    if (system.empty()) system = "You are a helpful assistant.";
+
+    // CORS for streaming
+    res.set_header("Access-Control-Allow-Origin", "*");
+    res.set_header("Cache-Control", "no-cache");
+
+    // Use chunked transfer with text/event-stream
+    res.set_chunked_content_provider(
+        "text/event-stream",
+        [this, messages, prompt, system, session_id, max_length](
+            size_t /*offset*/, httplib::DataSink& sink) -> bool {
+          std::string full_result;
+          std::string sid = session_id;
+          auto on_token = [&](const std::string& token) {
+            full_result += token;
+            std::string escaped = JsonEscape(token);
+            std::string event =
+                "data: {\"token\":\"" + escaped + "\"}\n\n";
+            sink.write(event.c_str(), event.size());
+          };
+
+          try {
+            std::lock_guard<std::mutex> lock(llm_mutex);
+            if (!messages.empty()) {
+              llm->Chat(messages, max_length, on_token);
+            } else {
+              llm->Chat(system, prompt, max_length, on_token);
+            }
+          } catch (const std::exception& e) {
+            std::string err =
+                "data: {\"error\":\"" + JsonEscape(e.what()) + "\"}\n\n";
+            sink.write(err.c_str(), err.size());
+          }
+
+          // Auto-save to memory
+          if (memory && !full_result.empty()) {
+            try {
+              if (sid.empty()) {
+                sid = memory->StartSession("chat");
+              }
+              if (!messages.empty() && messages.back().role == "user") {
+                memory->SaveMessage(sid, "user", messages.back().content);
+              } else if (!prompt.empty()) {
+                memory->SaveMessage(sid, "user", prompt);
+              }
+              memory->SaveMessage(sid, "assistant", full_result);
+            } catch (...) {}
+          }
+
+          // Send done marker with session_id
+          std::string done =
+              "data: {\"done\":true,\"text\":\"" +
+              JsonEscape(full_result) +
+              "\",\"session_id\":\"" + JsonEscape(sid) + "\"}\n\n";
+          sink.write(done.c_str(), done.size());
+
+          sink.done();
+          return true;
+        });
   });
 
   // ── POST /v1/chat/soap ──

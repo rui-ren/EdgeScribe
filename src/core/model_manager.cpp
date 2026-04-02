@@ -62,14 +62,16 @@ static const struct {
     },
     {
         "kokoro",
-        "Kokoro TTS",
-        "EDGESCRIBE/kokoro-onnx",
-        "Text-to-speech. Natural voices. CPU optimized.",
+        "Kokoro TTS v1.0",
+        "onnx-community/Kokoro-82M-v1.0-ONNX",
+        "Text-to-speech. Natural voices. CPU optimized. FP32.",
         "tts",
-        "model.onnx",
-        300,
-        {"model.onnx", "voices.bin", "config.json"},
-        3,
+        "onnx/model.onnx",
+        310,
+        {"onnx/model.onnx", "config.json",
+         "voices/af_heart.bin", "voices/af_sky.bin",
+         "voices/am_michael.bin", "voices/am_adam.bin"},
+        6,
     },
 };
 

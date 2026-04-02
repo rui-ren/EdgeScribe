@@ -119,13 +119,39 @@ jobs:
           fi
           echo "ORT_GENAI_PATH=$GENAI_DIR" >> $GITHUB_ENV
 
+      # ── Download webview.h for native GUI ─────────────────────────────
+      - name: Download webview.h
+        run: |
+          curl -sL -o include/webview/webview.h https://raw.githubusercontent.com/nicedoc/webview/0.12.0/core/include/webview/webview.h || true
+
+      - name: Download webview.h (fallback)
+        shell: pwsh
+        run: |
+          if ((Get-Item include/webview/webview.h -ErrorAction SilentlyContinue).Length -lt 1000) {
+            Invoke-WebRequest -Uri "https://github.com/webview/webview/archive/refs/tags/0.12.0.zip" -OutFile webview_tmp.zip
+            Expand-Archive webview_tmp.zip -DestinationPath webview_ext -Force
+            $wvh = Get-ChildItem webview_ext -Recurse -Filter "webview.h" | Sort-Object Length -Descending | Select-Object -First 1
+            Copy-Item $wvh.FullName include/webview/webview.h -Force
+            Remove-Item webview_tmp.zip, webview_ext -Recurse -Force
+          }
+          Write-Host "webview.h size: $((Get-Item include/webview/webview.h).Length) bytes"
+
+      - name: Download WebView2 SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -OutputDirectory deps -Source https://api.nuget.org/v3/index.json
+          $wv2 = Get-ChildItem deps -Directory -Filter "Microsoft.Web.WebView2*" | Select-Object -First 1
+          echo "WEBVIEW2_PATH=$($wv2.FullName)" >> $env:GITHUB_ENV
+
       # ── Configure and build EDGESCRIBE ──────────────────────────────────
       - name: Configure CMake (macOS/Linux)
         if: runner.os != 'Windows'
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
             -DORT_GENAI_PATH=${{ env.ORT_GENAI_PATH }} \
-            -DLLAMA_CPP_PATH=${{ env.LLAMA_CPP_PATH }}
+            -DLLAMA_CPP_PATH=${{ env.LLAMA_CPP_PATH }} \
+            -DEDGESCRIBE_ENABLE_GUI=ON
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
@@ -133,7 +159,9 @@ jobs:
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release `
             -DORT_GENAI_PATH="$env:ORT_GENAI_PATH" `
-            -DLLAMA_CPP_PATH="$env:LLAMA_CPP_PATH"
+            -DLLAMA_CPP_PATH="$env:LLAMA_CPP_PATH" `
+            -DEDGESCRIBE_ENABLE_GUI=ON `
+            -DWEBVIEW2_PATH="$env:WEBVIEW2_PATH"
 
       - name: Build
         run: cmake --build build --config Release
@@ -144,10 +172,13 @@ jobs:
         run: |
           $outDir = "openscribe-${{ matrix.rid }}"
           New-Item -ItemType Directory -Path $outDir -Force
-          Copy-Item build/Release/openscribe.exe $outDir/
+          Copy-Item build/Release/edgescribe.exe $outDir/
           Copy-Item build/Release/*.dll $outDir/ -ErrorAction SilentlyContinue
+          Copy-Item -Recurse www $outDir/www
           Copy-Item README.md $outDir/
           Copy-Item LICENSE $outDir/
+          # Bundle VC++ redistributable for users without Visual C++ runtime
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$outDir/vc_redist_x64.exe" -UseBasicParsing
           Compress-Archive -Path $outDir -DestinationPath "openscribe-${{ matrix.rid }}.zip"
 
       - name: Build Installer (Windows)
@@ -173,9 +204,10 @@ jobs:
         run: |
           OUT_DIR="openscribe-${{ matrix.rid }}"
           mkdir -p "$OUT_DIR"
-          cp build/openscribe "$OUT_DIR/"
+          cp build/edgescribe "$OUT_DIR/"
           cp build/*.dylib "$OUT_DIR/" 2>/dev/null || true
           cp build/*.so* "$OUT_DIR/" 2>/dev/null || true
+          cp -r www "$OUT_DIR/www"
           cp README.md "$OUT_DIR/"
           cp LICENSE "$OUT_DIR/"
           tar czf "openscribe-${{ matrix.rid }}.tar.gz" "$OUT_DIR"

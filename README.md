@@ -65,10 +65,10 @@ Grab the latest release for your platform from [Releases](https://github.com/EDG
 # Speech-to-text (required, ~670 MB)
 edgescribe pull nemotron
 
-# Vision + language — OCR, SOAP notes (optional, ~990 MB)
+# Vision + language — OCR, SOAP notes (optional, ~1.8 GB)
 edgescribe pull qwen3-vl
 
-# Text-to-speech (optional, ~300 MB)
+# Text-to-speech (optional, ~310 MB)
 edgescribe pull kokoro
 ```
 
@@ -250,9 +250,9 @@ edgescribe speak --voices
 | Model | Type | Size | Description |
 |-------|------|------|-------------|
 | `nemotron` | ASR | ~670 MB | Real-time English speech-to-text (Parakeet TDT 0.6B, ONNX) |
-| `qwen3-vl` | VLM | ~990 MB | Vision + language — OCR, SOAP notes (Qwen3-VL-2B Q4_K_M, GGUF) |
-| `kokoro` | TTS | ~300 MB | Text-to-speech with natural voices (ONNX) |
-| | | **~1.96 GB** | **Total for full AI suite** |
+| `qwen3-vl` | VLM | ~1.8 GB | Vision + language — OCR, SOAP notes (Qwen3-VL-2B Q4_K_M + mmproj, GGUF) |
+| `kokoro` | TTS | ~310 MB | Text-to-speech with natural voices (Kokoro 82M FP32, ONNX) |
+| | | **~2.8 GB** | **Total for full AI suite** |
 
 Models are downloaded from HuggingFace and cached locally at:
 - **Windows**: `%LOCALAPPDATA%\EDGESCRIBE\models\`

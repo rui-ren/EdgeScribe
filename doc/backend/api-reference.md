@@ -168,13 +168,28 @@ const { transcript } = await final.json();
 
 ### POST /v1/chat
 
-General chat completion.
+General chat completion. Waits for the full response before returning.
 
-**Request:**
+Supports two modes:
+
+**Single-turn** (prompt + system):
 ```json
 {
   "prompt": "What are the side effects of metformin?",
   "system": "You are a helpful medical assistant.",
+  "max_length": 2048
+}
+```
+
+**Multi-turn** (messages array):
+```json
+{
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What is hypertension?"},
+    {"role": "assistant", "content": "Hypertension is high blood pressure..."},
+    {"role": "user", "content": "What are the treatment options?"}
+  ],
   "max_length": 2048
 }
 ```
@@ -186,12 +201,83 @@ General chat completion.
 }
 ```
 
+### POST /v1/chat/stream
+
+Streaming chat completion using Server-Sent Events (SSE). Tokens are sent
+as they are generated, enabling real-time display in the UI.
+
+Accepts the same request body as `/v1/chat` (both single-turn and multi-turn).
+
+**Response:** `Content-Type: text/event-stream` (chunked transfer encoding)
+
+Each token is sent as an SSE event:
+```
+data: {"token":"Common"}
+
+data: {"token":" side"}
+
+data: {"token":" effects"}
+```
+
+When generation is complete, a final event is sent with the full text:
+```
+data: {"done":true,"text":"Common side effects of metformin include..."}
+```
+
+If an error occurs during generation:
+```
+data: {"error":"Model inference failed"}
+```
+
+**Example (JavaScript — streaming):**
+```javascript
+const res = await fetch('http://localhost:8080/v1/chat/stream', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    messages: [
+      { role: 'system', content: 'You are a helpful assistant.' },
+      { role: 'user', content: 'What is hypertension?' }
+    ]
+  })
+});
+
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+let buffer = '';
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+
+  buffer += decoder.decode(value, { stream: true });
+  const lines = buffer.split('\n');
+  buffer = lines.pop();
+
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) continue;
+    const data = JSON.parse(line.slice(6));
+    if (data.done) {
+      console.log('Full response:', data.text);
+    } else if (data.token) {
+      process.stdout.write(data.token);  // display token-by-token
+    }
+  }
+}
+```
+
 **Example (curl):**
 ```bash
-curl -X POST http://localhost:8080/v1/chat \
+curl -N -X POST http://localhost:8080/v1/chat/stream \
   -H "Content-Type: application/json" \
   -d '{"prompt":"What is hypertension?","system":"You are a doctor."}'
 ```
+
+**Notes:**
+- The streaming endpoint auto-saves conversations to the memory database.
+- Use `/v1/chat` (non-streaming) for programmatic access where you just need the final result.
+- Use `/v1/chat/stream` for interactive UIs where you want real-time token display.
+- The frontend automatically falls back to `/v1/chat` if streaming is unavailable.
 
 ### POST /v1/chat/soap
 
@@ -340,3 +426,83 @@ All errors return JSON:
 | 400 | Bad request (missing field, empty body) |
 | 500 | Internal error (model failure) |
 | 503 | Engine not loaded (model not available) |
+
+---
+
+## Memory / Sessions
+
+Chat conversations and transcription sessions are automatically saved to a
+local SQLite database (`~/.EDGESCRIBE/edgescribe.db`). These endpoints let the
+frontend browse, search, and manage saved sessions.
+
+### GET /v1/memory/sessions
+
+List recent sessions (up to 50, newest first).
+
+**Response:**
+```json
+{
+  "sessions": [
+    {
+      "id": "s_a3f8b2",
+      "type": "chat",
+      "model": "qwen3-vl",
+      "started_at": "2026-03-30T14:22:01",
+      "message_count": 15
+    }
+  ]
+}
+```
+
+### GET /v1/memory/sessions/:id
+
+Get all messages and notes for a specific session.
+
+**Response:**
+```json
+{
+  "session_id": "s_a3f8b2",
+  "messages": [
+    {"role": "user", "content": "What is hypertension?", "created_at": "2026-03-30T14:22:05"},
+    {"role": "assistant", "content": "Hypertension is...", "created_at": "2026-03-30T14:22:12"}
+  ],
+  "notes": [
+    {"type": "soap", "output_text": "S: Patient reports...", "created_at": "2026-03-30T14:25:00"}
+  ]
+}
+```
+
+### POST /v1/memory/search
+
+Full-text search across all saved messages.
+
+**Request:**
+```json
+{
+  "query": "metformin"
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "session_id": "s_a3f8b2",
+      "role": "assistant",
+      "content": "Metformin is a first-line medication...",
+      "created_at": "2026-03-30T14:22:12"
+    }
+  ]
+}
+```
+
+### DELETE /v1/memory/sessions/:id
+
+Delete a session and all its messages and notes (cascade delete).
+
+**Response:**
+```json
+{
+  "deleted": "s_a3f8b2"
+}

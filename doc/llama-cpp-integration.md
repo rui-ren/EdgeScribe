@@ -366,8 +366,31 @@ edgescribe pull kokoro      # TTS  — Kokoro (300 MB, ONNX)
 | Model | Format | Files | Size | HuggingFace Repo |
 |-------|--------|-------|------|-----------------|
 | nemotron | ONNX | encoder.onnx, decoder.onnx, joint.onnx + configs | 670 MB | EDGESCRIBE/nemotron-onnx-cpu |
-| qwen3-vl | **GGUF** | qwen3-vl-2b-instruct-q4_k_m.gguf | 990 MB | Qwen/Qwen3-VL-2B-Instruct-GGUF |
-| kokoro | ONNX | model.onnx, voices.bin, config.json | 300 MB | EDGESCRIBE/kokoro-onnx |
+| qwen3-vl | **GGUF** | Qwen3VL-2B-Instruct-Q4_K_M.gguf + mmproj-F16.gguf | 1.8 GB | Qwen/Qwen3-VL-2B-Instruct-GGUF |
+| kokoro | ONNX | onnx/model.onnx (FP32) + voice .bin files | 310 MB | onnx-community/Kokoro-82M-v1.0-ONNX |
+
+### Qwen3-VL Model Files (2 GGUF files)
+
+| File | Purpose | Size |
+|------|---------|:---:|
+| `Qwen3VL-2B-Instruct-Q4_K_M.gguf` | LLM brain (text reasoning, tokenizer embedded) | 1.0 GB |
+| `mmproj-Qwen3VL-2B-Instruct-F16.gguf` | Vision projector (translates image features → LLM embeddings) | 781 MB |
+
+### Kokoro TTS Model Files
+
+```
+kokoro/
+├── onnx/
+│   └── model.onnx          (310 MB, FP32)
+├── config.json
+└── voices/
+    ├── af_heart.bin          (female voice)
+    ├── af_sky.bin            (female voice)
+    ├── am_michael.bin        (male voice)
+    └── am_adam.bin           (male voice)
+```
+
+All models are **public and ungated** — no HuggingFace token required for download.
 
 ### GGUF vs ONNX — Why GGUF for LLM/Vision?
 
@@ -389,7 +412,10 @@ edgescribe pull kokoro      # TTS  — Kokoro (300 MB, ONNX)
 ```cpp
 #include "llm/llm_engine.h"
 
-// Load model — "cpu", "cuda", "metal", or "vulkan"
+// Load model — auto-detects GPU, falls back to CPU
+EDGESCRIBE::llm::LlmEngine engine("/path/to/model.gguf");
+
+// Force CPU only
 EDGESCRIBE::llm::LlmEngine engine("/path/to/model.gguf", "cpu");
 
 // Single-turn chat
@@ -399,7 +425,7 @@ std::string result = engine.Chat("You are helpful.", "What is aspirin?");
 engine.Chat("system prompt", "user message", 2048,
     [](const std::string& token) { std::cout << token << std::flush; });
 
-// Multi-turn chat
+// Multi-turn chat (KV cache reused automatically — only new tokens processed)
 std::vector<EDGESCRIBE::llm::ChatMessage> messages = {
     {"system", "You are a medical assistant."},
     {"user", "What is hypertension?"},
@@ -412,9 +438,28 @@ engine.Chat(messages, 2048, callback);
 engine.GenerateSOAPNotes(transcript, callback);
 engine.Summarize(text, callback);
 engine.FixMedicalTerms(transcript, callback);
+
+// Invalidate KV cache (call when starting a new conversation)
+engine.InvalidateCache();
 ```
 
-### Vision Engine (llama.cpp + CLIP)
+### KV Cache Optimization
+
+Multi-turn chat automatically reuses the KV cache from previous turns:
+
+```
+Turn 1:  [system + user1]                → 200 tokens processed, TTFT ~500ms
+Turn 2:  [system + user1 + asst1 + user2] → only 200 NEW tokens, TTFT ~50ms
+Turn 10: [full history]                    → only 200 NEW tokens, TTFT ~50ms
+```
+
+Performance output shows cache stats:
+```
+prompt: 2000 tokens | cached: 1800 | new: 200 | 400.0 tok/s | TTFT: 50 ms
+output: 150 tokens | 15.8 tok/s | 9500 ms
+```
+
+### Vision Engine (llama.cpp + mtmd)
 
 ```cpp
 #include "vision/vision_engine.h"
@@ -502,23 +547,30 @@ who need maximum NVIDIA performance, they can build from source with `DGGML_CUDA
 
 ### Device Selection
 
-The `--device` CLI flag controls GPU offloading for LLM/Vision (llama.cpp)
-and execution provider selection for ASR (onnxruntime-genai):
+GPU is **enabled by default** — no flag needed. llama.cpp auto-detects available
+GPU backends (Vulkan, CUDA, Metal) and offloads layers automatically. If no GPU
+is available, it silently falls back to CPU.
 
 | Device | LLM/Vision (llama.cpp) | ASR (onnxruntime-genai) |
 |--------|:---:|:---:|
-| `cpu` (default) | `n_gpu_layers = 0` | CPU execution provider |
-| `cuda` | `n_gpu_layers = 999` | CUDA execution provider |
-| `metal` | `n_gpu_layers = 999` | N/A |
-| `vulkan` | `n_gpu_layers = 999` | N/A |
-| `dml` | N/A | DirectML execution provider |
-
-When built with Vulkan, use `--device vulkan` to enable GPU acceleration:
+| (default, no flag) | **Auto GPU** → CPU fallback | CPU execution provider |
+| `cpu` | Force CPU only | CPU execution provider |
+| `cuda` | Force CUDA | CUDA execution provider |
+| `metal` | Force Metal | N/A |
+| `vulkan` | Force Vulkan | N/A |
 
 ```bash
-edgescribe chat "Hello" --device vulkan
-edgescribe serve --device vulkan
+# Auto GPU (recommended — just works)
+edgescribe chat "Hello"
+edgescribe serve --port 8080
+
+# Force CPU only
+edgescribe chat "Hello" --device cpu
 ```
+
+**Layer splitting**: If the model doesn't fully fit in GPU VRAM, llama.cpp
+automatically splits layers — some on GPU, some on CPU. No configuration needed.
+For example, on a 4 GB GPU, ~70% of layers may go to GPU and the rest to CPU.
 
 ### Sampling Parameters
 
@@ -542,16 +594,18 @@ A complete EDGESCRIBE distribution contains:
 
 ```
 edgescribe-win-x64/
-├── edgescribe.exe          (~1 MB)
-├── llama.dll               (~2 MB)      # LLM + Vision
-├── ggml.dll                (~0.1 MB)    # Tensor library
-├── ggml-base.dll           (~0.5 MB)    # Base backend
-├── ggml-cpu.dll            (~0.9 MB)    # CPU backend
-├── ggml-vulkan.dll         (~X MB)      # Vulkan GPU backend
-├── mtmd.dll                (~0.7 MB)    # Multimodal vision
-├── onnxruntime.dll         (~13.5 MB)   # TTS
-├── onnxruntime-genai.dll   (~2.3 MB)    # ASR
+├── edgescribe.exe              (~1 MB)     Application binary
+├── llama.dll                   (~2 MB)     LLM + Vision inference
+├── ggml.dll                    (~0.1 MB)   Backend loader
+├── ggml-base.dll               (~0.5 MB)   Core tensor ops
+├── ggml-cpu.dll                (~0.9 MB)   CPU backend (always used as fallback)
+├── ggml-vulkan.dll            (~54 MB)     Vulkan GPU backend (auto-fallback to CPU)
+├── mtmd.dll                    (~0.7 MB)   Multimodal vision (mmproj processing)
+├── onnxruntime.dll            (~13.5 MB)   TTS runtime
+├── onnxruntime-genai.dll       (~2.3 MB)   ASR runtime
 ├── onnxruntime_providers_shared.dll
+├── vc_redist_x64.exe          (~24 MB)     VC++ runtime (run if DLL errors)
+├── www/                                    Web frontend UI
 ├── README.md
 └── LICENSE
 ```
@@ -578,8 +632,11 @@ The Inno Setup installer (`installer/windows/edgescribe.iss`):
 | Chat template | `OgaTokenizer::ApplyChatTemplate()` | `llama_chat_apply_template()` |
 | Generation | `OgaGenerator::GenerateNextToken()` | `llama_sampler_sample()` |
 | Token decode | `OgaTokenizerStream::Decode()` | `llama_token_to_piece()` |
-| Vision | `OgaMultiModalProcessor::ProcessImages()` | `llava_image_embed_make_with_filename()` |
-| GPU selection | Execution providers | `n_gpu_layers` parameter |
+| Vision | `OgaMultiModalProcessor::ProcessImages()` | `mtmd_tokenize()` + `mtmd_helper_eval_chunks()` |
+| GPU selection | Execution providers | Auto GPU (`n_gpu_layers = 999`), auto-fallback to CPU |
+| KV cache | Cleared every turn | **Reused across turns** (prefix matching) |
+| Logging | ORT default (verbose) | Suppressed (warnings/errors only) |
+| Performance stats | None | TTFT, tok/s, cache hit info |
 
 ### What Did NOT Change
 

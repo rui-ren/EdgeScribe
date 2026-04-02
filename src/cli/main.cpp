@@ -82,6 +82,7 @@ static void PrintUsage() {
   std::cout << std::endl;
   std::cout << "Server:" << std::endl;
   std::cout << "  edgescribe serve [--port 8080]        Start REST API server" << std::endl;
+  std::cout << "  edgescribe serve --open               Start server and open browser" << std::endl;
 #ifdef EDGESCRIBE_HAS_GUI
   std::cout << "  edgescribe gui   [--port 8080]        Open native desktop app" << std::endl;
 #endif
@@ -660,11 +661,9 @@ int main(int argc, char* argv[]) {
       ModelManager manager;
       std::string model_path = manager.GetModelPath(model_name);
 
-      std::cout << "Loading model..." << std::endl;
       EDGESCRIBE::vision::VisionEngine engine(model_path);
 
-      std::cout << "Analyzing: " << image_path << std::endl;
-      std::cout << std::string(60, '-') << std::endl;
+      std::cerr << "Analyzing: " << image_path << std::endl;
 
       std::string result;
       auto callback = [](const std::string& token) {
@@ -998,6 +997,13 @@ int main(int argc, char* argv[]) {
       return 1;
     }
   }
+#else
+  // GUI not compiled — fall back to opening browser
+  if (command == "gui") {
+    std::cerr << "Native GUI not available in this build." << std::endl;
+    std::cerr << "Use 'edgescribe serve' instead, or rebuild with -DEDGESCRIBE_ENABLE_GUI=ON" << std::endl;
+    return 1;
+  }
 #endif
 
   // ── serve ──
@@ -1008,6 +1014,7 @@ int main(int argc, char* argv[]) {
     std::string asr_model;
     std::string vlm_model;
     std::string tts_model;
+    bool open_browser = false;
 
     for (int i = 2; i < argc; i++) {
       std::string arg = argv[i];
@@ -1023,6 +1030,8 @@ int main(int argc, char* argv[]) {
         if (i + 1 < argc) vlm_model = argv[++i];
       } else if (arg == "--tts-model") {
         if (i + 1 < argc) tts_model = argv[++i];
+      } else if (arg == "--open") {
+        open_browser = true;
       }
     }
 
@@ -1054,6 +1063,21 @@ int main(int argc, char* argv[]) {
 
     try {
       EDGESCRIBE::server::ApiServer server(config);
+
+      // Open browser if requested
+      if (open_browser) {
+        std::thread([port]() {
+          std::this_thread::sleep_for(std::chrono::milliseconds(800));
+          std::string url = "http://localhost:" + std::to_string(port);
+#ifdef _WIN32
+          ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#elif __APPLE__
+          system(("open " + url).c_str());
+#else
+          system(("xdg-open " + url + " &").c_str());
+#endif
+        }).detach();
+      }
 
       // Stop on Ctrl+C in a separate thread
       std::thread stop_thread([&]() {

@@ -48,6 +48,7 @@ struct TtsEngine::Impl {
   std::string model_dir;
 
   void LoadVoices(const std::string& voices_path);
+  void LoadVoicesFromDir(const std::string& voices_dir);
 };
 
 void TtsEngine::Impl::LoadVoices(const std::string& voices_path) {
@@ -95,6 +96,37 @@ void TtsEngine::Impl::LoadVoices(const std::string& voices_path) {
   }
 }
 
+void TtsEngine::Impl::LoadVoicesFromDir(const std::string& voices_dir) {
+  // Load individual .bin voice files from a directory
+  // Each file is a raw float32 array (style_dim floats)
+  for (const auto& entry : fs::directory_iterator(voices_dir)) {
+    if (entry.path().extension() == ".bin") {
+      std::string name = entry.path().stem().string();
+      auto file_size = fs::file_size(entry.path());
+      size_t dim = file_size / sizeof(float);
+
+      if (dim > 0) {
+        std::ifstream ifs(entry.path(), std::ios::binary);
+        std::vector<float> data(dim);
+        ifs.read(reinterpret_cast<char*>(data.data()),
+                 static_cast<std::streamsize>(file_size));
+        if (ifs.good()) {
+          style_dim = dim;
+          voices[name] = std::move(data);
+        }
+      }
+    }
+  }
+
+  if (voices.empty()) {
+    std::vector<float> default_voice(style_dim, 0.0f);
+    for (size_t i = 0; i < style_dim; i++) {
+      default_voice[i] = 0.01f * static_cast<float>(i % 10 - 5);
+    }
+    voices["default"] = std::move(default_voice);
+  }
+}
+
 // ── TTS Engine ──────────────────────────────────────────────────────────────
 TtsEngine::TtsEngine(const std::string& model_path) : impl_(std::make_unique<Impl>()) {
   impl_->model_dir = model_path;
@@ -104,15 +136,19 @@ TtsEngine::TtsEngine(const std::string& model_path) : impl_(std::make_unique<Imp
       GraphOptimizationLevel::ORT_ENABLE_ALL);
   impl_->session_options.SetIntraOpNumThreads(0);  // Auto
 
-  // Find model file
+  // Find model file — try multiple layouts
   fs::path model_file = fs::path(model_path) / "model.onnx";
   if (!fs::exists(model_file)) {
-    // Try kokoro.onnx
+    model_file = fs::path(model_path) / "onnx" / "model_fp16.onnx";
+  }
+  if (!fs::exists(model_file)) {
+    model_file = fs::path(model_path) / "onnx" / "model.onnx";
+  }
+  if (!fs::exists(model_file)) {
     model_file = fs::path(model_path) / "kokoro.onnx";
   }
   if (!fs::exists(model_file)) {
-    throw std::runtime_error("Cannot find TTS model (model.onnx) in: " +
-                             model_path);
+    throw std::runtime_error("Cannot find TTS model in: " + model_path);
   }
 
   // Create session
@@ -125,9 +161,17 @@ TtsEngine::TtsEngine(const std::string& model_path) : impl_(std::make_unique<Imp
       impl_->env, model_file.c_str(), impl_->session_options);
 #endif
 
-  // Load voice embeddings
+  // Load voice embeddings — try voices.bin (old format) or voices/ directory (new format)
   fs::path voices_file = fs::path(model_path) / "voices.bin";
-  impl_->LoadVoices(voices_file.string());
+  if (!fs::exists(voices_file)) {
+    // New format: individual .bin files in voices/ directory
+    fs::path voices_dir = fs::path(model_path) / "voices";
+    if (fs::exists(voices_dir) && fs::is_directory(voices_dir)) {
+      impl_->LoadVoicesFromDir(voices_dir.string());
+    }
+  } else {
+    impl_->LoadVoices(voices_file.string());
+  }
 
   // Log phonemizer status
   if (impl_->phonemizer.IsAvailable()) {

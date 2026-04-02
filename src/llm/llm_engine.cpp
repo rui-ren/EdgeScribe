@@ -15,9 +15,9 @@
 
 namespace EDGESCRIBE::llm {
 
-// Suppress llama.cpp verbose logs — only show warnings and errors
+// Suppress llama.cpp verbose logs — errors only
 static void LlamaLogCallback(enum ggml_log_level level, const char* text, void*) {
-  if (level >= GGML_LOG_LEVEL_WARN) {
+  if (level >= GGML_LOG_LEVEL_ERROR) {
     std::cerr << text;
   }
 }

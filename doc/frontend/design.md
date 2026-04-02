@@ -53,12 +53,15 @@ www/
 │   └── style.css       # Complete design system (colors, layout, components)
 └── js/
     ├── app.js          # App controller — routing, page setup, event handlers
-    └── api.js          # API client — thin fetch() wrappers for /v1/ endpoints
+    ├── api.js          # API client — thin fetch() wrappers for /v1/ endpoints
+    └── lib/
+        └── marked.min.js   # Markdown parser (downloaded at build time)
 ```
 
 All frontend logic lives in two JS files:
 - **`api.js`** handles HTTP calls (what to send)
 - **`app.js`** handles UI behavior (what to show)
+- **`marked.min.js`** is a third-party library for rendering Markdown in chat/vision results
 
 ---
 
@@ -71,16 +74,20 @@ The landing page shown on launch.
 - **Welcome hero** — greeting with a description of what the app does
 - **Privacy pill** — prominent badge: "🛡️ 100% Private — Nothing leaves your device"
 - **Status cards** — clickable tiles for each AI engine, showing ready/not-available
-- **Quick actions** — large buttons to jump to the most common tasks
+- **Quick actions** — large buttons to jump to the most common tasks (Record, Upload, Chat, Image, Medical Notes)
+- **Recent Sessions** — list of past sessions pulled from backend SQLite; click to copy
+- **Onboarding wizard** — first-launch overlay guiding new users through model setup
 
 ### 🎤 Record & Transcribe
 
 Real-time speech-to-text from the user's microphone.
 
-- **Record button** — large red circle; click to start/stop, pulses while recording
-- **Live transcript** — text appears in real time with a blinking cursor
-- **Stats bar** — elapsed time and chunk count
-- **Actions** — Copy text, Save as .txt file, Generate SOAP notes, Clear
+- **Transcript area** — text appears in real time with a blinking cursor (top)
+- **Action bar** — Copy text, Save as file, Generate SOAP notes, Clear
+- **Record hero** (bottom) — large red circle button with status text and hints
+- **Audio waveform** — real-time waveform visualization during recording
+- **Recording stats** — elapsed time and chunk count
+- When recording stops, transcript is auto-saved to backend SQLite
 
 Audio flows as: `Mic → Web Audio API (16 kHz PCM) → POST /v1/transcribe/push → display`
 
@@ -92,15 +99,26 @@ Transcribe a pre-recorded audio file.
 - **Progress bar** — gradient-filled bar during processing
 - **Transcript area** — result displayed with copy/save buttons
 - Supports WAV, MP3, and FLAC
+- Transcript auto-saved to backend SQLite
 
 ### 💬 Chat
 
-Conversational AI powered by the on-device LLM.
+Conversational AI powered by the on-device LLM with streaming responses.
 
+- **Session sidebar** (left panel) — past conversations from SQLite, searchable,
+  click to load, delete button per session, "New Chat" button
 - **Message thread** — scrolling list of user/assistant messages with avatars
-- **Input area** — auto-growing textarea with send button
-- **Keyboard shortcut** — Enter to send, Shift+Enter for new line
-- Welcome message explains capabilities and privacy
+- **Streaming responses** — tokens appear one-by-one via SSE (`/v1/chat/stream`)
+- **Markdown rendering** — assistant responses rendered with headers, bold, lists,
+  code blocks, tables via `marked.js`
+- **Per-message actions** — hover to reveal 📋 Copy and 🔊 Read Aloud buttons
+- **Drag-and-drop images** — drop an image into chat to ask questions about it
+  (routes to Vision API, shows inline preview)
+- **System prompt editor** — collapsible panel to customize AI behavior
+- **Chat export** — Word document (.doc) or PDF (via print dialog)
+- **Context indicator** — estimated token usage bar at the bottom
+- **Auto-grow textarea** — input grows as you type, Enter to send, Shift+Enter for newline
+- **Keyboard shortcuts** — Ctrl+Shift+R (record), Ctrl+Shift+N (new chat), Ctrl+Shift+C (copy last response)
 
 ### 🖼️ Image Analysis
 
@@ -109,12 +127,32 @@ Upload a photo for AI description or text extraction (OCR).
 - **Two-column layout** — image + prompt on the left, result on the right
 - **Two actions** — "Analyze Image" (general description) and "Extract Text (OCR)"
 - **Custom prompt** — user can ask specific questions about the image
+- **Markdown rendering** — results rendered as formatted Markdown
+- **Result actions** — Copy, Read Aloud, and "Continue in Chat" (injects result
+  into chat history and navigates to Chat page for follow-up questions)
+
+### 📋 Medical Notes
+
+Upload or paste clinical documents to extract structured medical information.
+
+- **Document input** — drag-and-drop file upload (.txt, .csv, .md) or paste text directly
+- **Analysis types** (radio cards):
+  - 📊 **Summary** — key findings, diagnoses, medications, procedures, recommendations
+  - 💊 **Medications** — all medications with dosage, frequency, purpose
+  - 🩺 **Diagnoses & Procedures** — conditions, treatments, lab results, referrals
+  - 📝 **SOAP Notes** — reformat into Subjective/Objective/Assessment/Plan
+- **Chunked processing** — large documents (>8K chars) are automatically split into
+  chunks, analyzed independently, then merged (map-reduce pattern)
+- **Streaming results** — tokens appear in real-time during analysis
+- **Result actions** — Copy, export as Word document, Read Aloud via TTS
 
 ### 🔊 Read Aloud
 
 Convert text to natural-sounding speech.
 
 - **Text input** — large textarea for typing or pasting
+- **Voice selector** — dropdown with 8 Kokoro voices (male/female, American/British)
+- **Speed slider** — adjustable from 0.5× to 2.0×
 - **Play / Save** — hear it immediately or download as a WAV file
 - **Audio player** — native HTML5 audio element for playback control
 
@@ -160,15 +198,29 @@ Base size: `15px`, line height: `1.6`.
 
 | Component | Class | Description |
 |-----------|-------|-------------|
-| Card | `.card` | Rounded container with subtle border and hover effect |
+| Card | `.card` | Rounded container with subtle border |
 | Status card | `.stat-card` | Dashboard tile with icon, label, status; lifts on hover |
-| Button | `.btn`, `.btn-primary`, `.btn-lg` | Rounded buttons; primary uses gradient accent |
+| Button | `.btn`, `.btn-primary`, `.btn-lg`, `.btn-sm` | Rounded buttons; primary uses gradient accent |
 | Record button | `.record-btn` | Red-bordered circle with pulse animation while recording |
+| Record hero | `.record-hero` | Centered card containing record button, status, and waveform |
+| Waveform canvas | `.waveform-canvas` | Real-time audio waveform during recording |
 | Transcript area | `.transcript-area` | Scrollable text display with blinking cursor |
 | Drop zone | `.drop-zone` | Dashed-border area for drag-and-drop file upload |
 | Toast | `.toast` | Slide-in notification (success/error/info); auto-dismisses |
 | Privacy badge | `.privacy-badge` | Green-tinted badge emphasizing on-device processing |
 | Welcome hero | `.welcome-hero` | Gradient-background hero section on the dashboard |
+| Session sidebar | `.session-sidebar` | Left panel in chat with session list, search, new chat button |
+| Session item | `.session-item` | Clickable session entry with title, meta, and delete button |
+| Message actions | `.msg-actions` | Copy and Read Aloud buttons on chat messages (hover to reveal) |
+| Chat image preview | `.chat-image-preview` | Inline preview strip when dropping an image into chat |
+| System prompt | `.system-prompt-section` | Collapsible editor above chat input |
+| Context indicator | `.context-indicator` | Token usage bar in chat footer |
+| Notes options | `.notes-analysis-options` | 2×2 grid of radio cards for analysis type selection |
+| Markdown body | `.markdown-body` | Styled container for rendered Markdown (headers, code, tables) |
+| Onboarding overlay | `.onboarding-overlay` | First-launch wizard with step dots |
+| Theme toggle | `.theme-toggle` | Dark/light mode switch button in sidebar header |
+| Select input | `.select-input` | Styled dropdown (used for TTS voice selector) |
+| Range input | `.range-input` | Styled slider (used for TTS speed) |
 
 ### Animations
 
@@ -186,7 +238,8 @@ Base size: `15px`, line height: `1.6`.
 | Breakpoint | Changes |
 |------------|---------|
 | `≤ 900px` | Vision layout collapses to single column |
-| `≤ 768px` | Sidebar becomes a slide-out drawer with hamburger toggle; reduced padding |
+| `≤ 768px` | Sidebar becomes a slide-out drawer with hamburger toggle; chat session sidebar hidden; reduced padding |
+| `≤ 600px` | Medical Notes analysis options collapse to single column |
 | `≤ 480px` | Card grid becomes single column; buttons stack vertically |
 
 ---
@@ -205,13 +258,19 @@ transcribeFile(file)    → POST /v1/transcribe/file     (multipart)
 transcribeStreamStart() → POST /v1/transcribe/stream
 transcribePush(buffer)  → POST /v1/transcribe/push     (raw PCM)
 transcribeFlush()       → POST /v1/transcribe/flush
-chat(prompt)            → POST /v1/chat                (JSON)
+chat(prompt)            → POST /v1/chat                (JSON, full response)
+chatMultiTurn(messages)  → POST /v1/chat                (JSON, multi-turn)
+chatStream(msgs, onTok) → POST /v1/chat/stream         (SSE, token-by-token)
 generateSoap(text)      → POST /v1/chat/soap           (JSON)
 summarize(text)         → POST /v1/chat/summarize      (JSON)
 analyzeImage(file, p)   → POST /v1/vision/analyze      (multipart)
 ocrImage(file)          → POST /v1/vision/ocr           (multipart)
-synthesize(text)        → POST /v1/tts/synthesize      (JSON → WAV blob)
+synthesize(text, v, s)  → POST /v1/tts/synthesize      (JSON → WAV blob)
 listVoices()            → GET  /v1/tts/voices
+getSessions()           → GET  /v1/memory/sessions
+getSession(id)          → GET  /v1/memory/sessions/:id
+searchMemory(query)     → POST /v1/memory/search       (JSON)
+deleteSession(id)       → DELETE /v1/memory/sessions/:id
 ```
 
 ### `app.js` — App Controller
@@ -226,9 +285,37 @@ Handles all UI logic in a single module:
 | `refreshHealth()` | Calls `/v1/health` and updates engine status indicators |
 | `setupLiveTranscription()` | Mic recording, PCM streaming, transcript display |
 | `setupFileTranscription()` | Drag-and-drop upload, progress bar, result display |
-| `setupChat()` | Message threading, input handling, send on Enter |
+| `setupChat()` | Message threading, streaming responses, session management |
 | `setupVision()` | Image upload, analyze/OCR buttons, result display |
-| `setupTTS()` | Text input, play/save audio |
+| `setupTTS()` | Text input, voice/speed selector, play/save audio |
+| `setupHistory()` | Dashboard transcript history from backend SQLite |
+| `setupOnboarding()` | First-launch welcome wizard |
+| `setupKeyboardShortcuts()` | Global keyboard shortcuts |
+| `loadSessionList()` | Fetch and render session sidebar from backend |
+| `loadSession(id)` | Load a past conversation into the chat view |
+| `startNewChat()` | Reset chat state for a new conversation |
+| `exportChatAsWord()` | Export chat as .doc file (opens in Word) |
+| `startWaveformDraw()` | Real-time audio waveform during recording |
+| `updateContextIndicator()` | Estimated token usage bar in chat |
+
+### Streaming Chat Architecture
+
+The chat uses **Server-Sent Events (SSE)** for real-time token display:
+
+```
+User sends message
+  → POST /v1/chat/stream (with message history)
+  → Backend generates tokens one-by-one via llama.cpp
+  → Each token sent as SSE event: data: {"token":"word"}\n\n
+  → Frontend reads via fetch() ReadableStream
+  → Each token appended to the message div in real-time
+  → On completion: data: {"done":true,"text":"full response"}\n\n
+  → Frontend re-renders full text as formatted Markdown
+  → Falls back to POST /v1/chat if streaming unavailable
+```
+
+This gives users the experience of watching the AI "type" its response,
+similar to ChatGPT or other modern AI interfaces.
 
 ### Routing
 
@@ -276,6 +363,29 @@ Privacy is EDGESCRIBE's core value, so it's surfaced prominently:
 - **Toast notifications** instead of `alert()` — less disruptive
 - **Inline status text** instead of modal spinners — "⏳ Generating..."
 - **Copy confirmation** via toast ("Copied to clipboard!") — no popup
+- **Streaming responses** — tokens appear as they're generated, not all-at-once
+- **Per-message actions** — Copy/Read Aloud buttons appear on hover, not always visible
+
+### Cross-Feature Integration
+
+Features connect to each other naturally, reducing context-switching:
+
+- **Vision → Chat** — "Continue in Chat" button injects image analysis into chat
+  history for follow-up questions
+- **Transcription → SOAP** — "Generate SOAP Notes" button sends transcript to LLM
+- **Medical Notes → Word** — one-click export to Word document for clinical workflows
+- **Any result → TTS** — Read Aloud buttons on chat messages, vision results, and
+  medical notes analysis
+- **Chunked processing** — large documents (>8K chars) are automatically split,
+  analyzed in sections, and merged — users don't need to know about context limits
+
+### Theme Support
+
+Light and dark themes with instant switching:
+
+- Toggle button (☀️/🌙) in sidebar header
+- Preference saved to `localStorage`
+- All colors defined via CSS custom properties — `[data-theme="light"]` overrides
 
 ### Mobile Support
 

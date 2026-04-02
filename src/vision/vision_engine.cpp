@@ -24,9 +24,9 @@ static int DetectGpuLayers(const std::string& device) {
 VisionEngine::VisionEngine(const std::string& model_path,
                            const std::string& device)
     : model_path_(model_path) {
-  // Suppress verbose llama.cpp logs
+  // Suppress verbose llama.cpp logs — errors only
   llama_log_set([](enum ggml_log_level level, const char* text, void*) {
-    if (level >= GGML_LOG_LEVEL_WARN) std::cerr << text;
+    if (level >= GGML_LOG_LEVEL_ERROR) std::cerr << text;
   }, nullptr);
 
   // Load the LLM model
