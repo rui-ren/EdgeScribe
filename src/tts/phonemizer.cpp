@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 
@@ -24,20 +25,59 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <unistd.h>
 #endif
+
+namespace fs = std::filesystem;
 
 // espeak-ng constants (avoid header dependency)
 #define ESPEAK_AUDIO_OUTPUT_RETRIEVAL 0x2000
 #define ESPEAK_CHARS_AUTO 0
 #define ESPEAK_PHONEMES_IPA 0x02
 
+namespace {
+
+std::string GetExeDir() {
+#ifdef _WIN32
+  char path[MAX_PATH];
+  GetModuleFileNameA(nullptr, path, MAX_PATH);
+  return fs::path(path).parent_path().string();
+#else
+  char path[4096];
+  ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+  if (len > 0) {
+    path[len] = '\0';
+    return fs::path(path).parent_path().string();
+  }
+  return ".";
+#endif
+}
+
+}  // namespace
+
 namespace EDGESCRIBE::tts {
 
 Phonemizer::Phonemizer() {
   available_ = LoadEspeakLibrary();
   if (available_) {
-    // Initialize espeak-ng
-    int result = fn_init_(ESPEAK_AUDIO_OUTPUT_RETRIEVAL, 0, nullptr, 0);
+    // Try initializing with bundled data directory first (next to exe)
+    // espeak_Initialize(output, buflength, path, options)
+    // path = nullptr means use default system locations
+    int result = -1;
+
+    // Try bundled espeak-ng-data next to the executable
+    auto exe_dir = fs::path(GetExeDir());
+    auto bundled_data = exe_dir / "espeak-ng-data";
+    if (fs::exists(bundled_data)) {
+      result = fn_init_(ESPEAK_AUDIO_OUTPUT_RETRIEVAL, 0,
+                        bundled_data.parent_path().string().c_str(), 0);
+    }
+
+    // Fall back to system-installed espeak-ng
+    if (result < 0) {
+      result = fn_init_(ESPEAK_AUDIO_OUTPUT_RETRIEVAL, 0, nullptr, 0);
+    }
+
     if (result >= 0) {
       initialized_ = true;
     } else {

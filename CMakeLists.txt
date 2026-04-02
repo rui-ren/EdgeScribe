@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(edgescribe VERSION 0.1.0 LANGUAGES C CXX)
+project(edgescribe VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -299,7 +299,7 @@ if(EDGESCRIBE_ENABLE_GUI)
     endif()
 
     target_sources(edgescribe PRIVATE src/gui/gui_launcher.cpp)
-    target_include_directories(edgescribe PRIVATE "${CMAKE_SOURCE_DIR}/include")
+    target_include_directories(edgescribe PRIVATE "${CMAKE_SOURCE_DIR}/include/webview")
     target_compile_definitions(edgescribe PRIVATE EDGESCRIBE_HAS_GUI)
 
     if(WIN32)

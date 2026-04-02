@@ -179,6 +179,9 @@ TtsEngine::TtsEngine(const std::string& model_path) : impl_(std::make_unique<Imp
   } else {
     std::cout << "G2P: fallback (install espeak-ng for better quality)" << std::endl;
   }
+
+  // Load tokenizer vocab from tokenizer.json
+  GetKokoroVocab(model_path);
 }
 
 TtsEngine::~TtsEngine() = default;
@@ -199,11 +202,27 @@ AudioOutput TtsEngine::Synthesize(const std::string& text,
   // Get voice embedding
   std::vector<float> style_vec;
   auto it = impl_->voices.find(voice);
-  if (it != impl_->voices.end()) {
-    style_vec = it->second;
+  const auto& full_voice = (it != impl_->voices.end())
+      ? it->second : impl_->voices.begin()->second;
+
+  // Kokoro v1.0 voice files are shaped (N, 1, 256) where N = max token positions.
+  // Index by len(tokens) to get the (1, 256) style vector for this input length.
+  // Kokoro v0.x voice files are just 256 floats (single vector).
+  constexpr size_t kStyleDim = 256;
+  size_t n_tokens = tokens.size();
+
+  if (full_voice.size() == kStyleDim) {
+    // Old format: single 256-dim vector
+    style_vec = full_voice;
+  } else if (full_voice.size() > kStyleDim && full_voice.size() % kStyleDim == 0) {
+    // v1.0 format: (N, 256) — select row indexed by token count
+    size_t n_positions = full_voice.size() / kStyleDim;
+    size_t idx = std::min(n_tokens, n_positions - 1);
+    size_t offset = idx * kStyleDim;
+    style_vec.assign(full_voice.begin() + static_cast<ptrdiff_t>(offset),
+                     full_voice.begin() + static_cast<ptrdiff_t>(offset + kStyleDim));
   } else {
-    // Fall back to first available voice
-    style_vec = impl_->voices.begin()->second;
+    style_vec = full_voice;
   }
 
   // Prepare input tensors

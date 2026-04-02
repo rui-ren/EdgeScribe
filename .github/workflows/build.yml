@@ -166,6 +166,24 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      # ── Install espeak-ng for TTS phonemizer ────────────────────────────
+      - name: Install espeak-ng (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install espeak-ng -y --no-progress
+
+      - name: Install espeak-ng (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install espeak-ng
+
+      - name: Install espeak-ng (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y espeak-ng libespeak-ng1
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -177,6 +195,12 @@ jobs:
           Copy-Item -Recurse www $outDir/www
           Copy-Item README.md $outDir/
           Copy-Item LICENSE $outDir/
+          # Bundle espeak-ng DLL + data for TTS phonemizer
+          $espeakDir = "C:\Program Files\eSpeak NG"
+          if (Test-Path $espeakDir) {
+            Copy-Item "$espeakDir\libespeak-ng.dll" $outDir/
+            Copy-Item -Recurse "$espeakDir\espeak-ng-data" "$outDir\espeak-ng-data"
+          }
           # Bundle VC++ redistributable for users without Visual C++ runtime
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$outDir/vc_redist_x64.exe" -UseBasicParsing
           Compress-Archive -Path $outDir -DestinationPath "openscribe-${{ matrix.rid }}.zip"
@@ -210,6 +234,23 @@ jobs:
           cp -r www "$OUT_DIR/www"
           cp README.md "$OUT_DIR/"
           cp LICENSE "$OUT_DIR/"
+          # Bundle espeak-ng library + data for TTS phonemizer
+          if [ "$(uname)" = "Darwin" ]; then
+            ESPEAK_LIB=$(brew --prefix espeak-ng 2>/dev/null)/lib/libespeak-ng.dylib
+            ESPEAK_DATA=$(brew --prefix espeak-ng 2>/dev/null)/share/espeak-ng-data
+          else
+            ESPEAK_LIB=$(find /usr/lib -name "libespeak-ng.so.1" 2>/dev/null | head -1)
+            ESPEAK_DATA=/usr/share/espeak-ng-data
+            if [ ! -d "$ESPEAK_DATA" ]; then
+              ESPEAK_DATA=/usr/lib/x86_64-linux-gnu/espeak-ng-data
+            fi
+          fi
+          if [ -f "$ESPEAK_LIB" ]; then
+            cp "$ESPEAK_LIB" "$OUT_DIR/"
+          fi
+          if [ -d "$ESPEAK_DATA" ]; then
+            cp -r "$ESPEAK_DATA" "$OUT_DIR/espeak-ng-data"
+          fi
           tar czf "openscribe-${{ matrix.rid }}.tar.gz" "$OUT_DIR"
 
       - name: Upload artifact

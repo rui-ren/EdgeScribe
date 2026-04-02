@@ -1,154 +1,141 @@
 // EDGESCRIBE — Kokoro Phoneme Vocabulary
-// Maps IPA phoneme characters to Kokoro token IDs
-//
-// Kokoro TTS uses a phoneme-level vocabulary derived from IPA (International
-// Phonetic Alphabet). This file defines the mapping from IPA symbols to the
-// integer token IDs that the Kokoro ONNX model expects.
-//
-// The vocabulary is based on the kokoro-onnx project:
-// https://github.com/thewh1teagle/kokoro-onnx
-//
-// Token 0 = pad, 1 = start/BOS, 2 = end/EOS
-// Phoneme tokens start at 3
+// Loads IPA phoneme to token ID mapping from tokenizer.json at runtime.
+// Falls back to a minimal hardcoded vocab if tokenizer.json is not found.
 
 #pragma once
 
+#include <cctype>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace EDGESCRIBE::tts {
 
-// Kokoro phoneme vocabulary
-// Maps IPA characters/digraphs to token IDs
-inline const std::unordered_map<std::string, int64_t>& GetKokoroVocab() {
-  static const std::unordered_map<std::string, int64_t> vocab = {
-      // Special tokens
-      {"<pad>", 0},
-      {"<bos>", 1},
-      {"<eos>", 2},
+// Parse tokenizer.json to extract vocab: { "model": { "vocab": { "c": id } } }
+inline std::unordered_map<std::string, int64_t> LoadTokenizerJson(
+    const std::string& path) {
+  std::unordered_map<std::string, int64_t> vocab;
 
-      // Whitespace and punctuation
-      {" ", 3},
-      {"!", 4},
-      {"\"", 5},
-      {"#", 6},
-      {"$", 7},
-      {"%", 8},
-      {"&", 9},
-      {"'", 10},
-      {"(", 11},
-      {")", 12},
-      {"*", 13},
-      {"+", 14},
-      {",", 15},
-      {"-", 16},
-      {".", 17},
-      {"/", 18},
+  std::ifstream ifs(path);
+  if (!ifs.is_open()) return vocab;
 
-      // Digits
-      {"0", 19},
-      {"1", 20},
-      {"2", 21},
-      {"3", 22},
-      {"4", 23},
-      {"5", 24},
-      {"6", 25},
-      {"7", 26},
-      {"8", 27},
-      {"9", 28},
+  std::string content((std::istreambuf_iterator<char>(ifs)),
+                       std::istreambuf_iterator<char>());
 
-      // Punctuation continued
-      {":", 29},
-      {";", 30},
-      {"<", 31},
-      {"=", 32},
-      {">", 33},
-      {"?", 34},
-      {"@", 35},
+  // Find "vocab": { ... }
+  auto vocab_pos = content.find("\"vocab\"");
+  if (vocab_pos == std::string::npos) return vocab;
 
-      // IPA vowels (monophthongs)
-      {"a", 36},
-      {"b", 37},
-      {"c", 38},
-      {"d", 39},
-      {"e", 40},
-      {"f", 41},
-      {"g", 42},
-      {"h", 43},
-      {"i", 44},
-      {"j", 45},
-      {"k", 46},
-      {"l", 47},
-      {"m", 48},
-      {"n", 49},
-      {"o", 50},
-      {"p", 51},
-      {"q", 52},
-      {"r", 53},
-      {"s", 54},
-      {"t", 55},
-      {"u", 56},
-      {"v", 57},
-      {"w", 58},
-      {"x", 59},
-      {"y", 60},
-      {"z", 61},
+  auto brace_start = content.find('{', vocab_pos);
+  if (brace_start == std::string::npos) return vocab;
 
-      // IPA specific symbols
-      {"\xC9\x91", 62},   // ɑ (open back unrounded)
-      {"\xC3\xA6", 63},   // æ (near-open front unrounded)
-      {"\xCA\x83", 64},   // ʃ (voiceless postalveolar fricative)
-      {"\xCA\x92", 65},   // ʒ (voiced postalveolar fricative)
-      {"\xC3\xB0", 66},   // ð (voiced dental fricative)
-      {"\xCE\xB8", 67},   // θ (voiceless dental fricative)
-      {"\xC9\xAA", 68},   // ɪ (near-close near-front unrounded)
-      {"\xCA\x8A", 69},   // ʊ (near-close near-back rounded)
-      {"\xC9\x9B", 70},   // ɛ (open-mid front unrounded)
-      {"\xC9\x94", 71},   // ɔ (open-mid back rounded)
-      {"\xC9\x99", 72},   // ə (schwa)
-      {"\xCA\x8C", 73},   // ʌ (open-mid back unrounded)
-      {"\xC5\x8B", 74},   // ŋ (velar nasal)
-      {"\xC9\xB9", 75},   // ɹ (alveolar approximant)
-      {"\xCA\x94", 76},   // ʔ (glottal stop)
-      {"\xC9\xBE", 77},   // ɾ (alveolar flap)
-      {"\xC9\xAB", 78},   // ɫ (dark l, velarized)
-      {"\xC9\x9C", 79},   // ɜ (open-mid central unrounded)
-      {"\xC9\x92", 80},   // ɒ (open back rounded)
+  size_t pos = brace_start + 1;
+  int depth = 1;
 
-      // IPA diacritics and suprasegmentals
-      {"\xCB\x88", 81},   // ˈ (primary stress)
-      {"\xCB\x8C", 82},   // ˌ (secondary stress)
-      {"\xCB\x90", 83},   // ː (long)
-      {"\xCC\xA9", 84},   // ̩ (syllabic)
-      {"\xCC\xAF", 85},   // ̯ (non-syllabic)
-      {"\xCA\xB0", 86},   // ʰ (aspirated)
-      {"\xCB\xA1", 87},   // ˡ (lateral release)
+  while (pos < content.size() && depth > 0) {
+    // Skip whitespace and commas
+    while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\n' ||
+           content[pos] == '\r' || content[pos] == '\t' || content[pos] == ','))
+      pos++;
 
-      // Additional IPA
-      {"\xC3\xA8", 88},   // è
-      {"\xC9\xA8", 89},   // ɨ (close central unrounded)
-      {"\xC3\xB8", 90},   // ø (close-mid front rounded)
-      {"\xC3\xBC", 91},   // ü
-      {"\xC3\xA3", 92},   // ã (nasalized a)
-      {"\xC3\xB5", 93},   // õ (nasalized o)
-      {"\xC4\xA9", 94},   // ĩ (nasalized i)
-      {"\xC5\xA9", 95},   // ũ (nasalized u)
+    if (pos >= content.size()) break;
+    if (content[pos] == '}') { depth--; pos++; continue; }
+    if (content[pos] == '{') { depth++; pos++; continue; }
 
-      // Tie bars and affricates
-      {"\xCD\x9C", 96},   // ͜ (tie bar below)
-      {"\xCD\xA1", 97},   // ͡ (tie bar above, used in t͡ʃ, d͡ʒ)
-  };
+    // Parse "key": value
+    if (content[pos] != '"') { pos++; continue; }
+    pos++;  // skip "
+
+    std::string key;
+    while (pos < content.size() && content[pos] != '"') {
+      if (content[pos] == '\\' && pos + 1 < content.size()) {
+        pos++;
+        if (content[pos] == '"') key += '"';
+        else if (content[pos] == '\\') key += '\\';
+        else if (content[pos] == 'n') key += '\n';
+        else if (content[pos] == 'u' && pos + 4 < content.size()) {
+          std::string hex = content.substr(pos + 1, 4);
+          unsigned long cp = std::stoul(hex, nullptr, 16);
+          if (cp < 0x80) {
+            key += static_cast<char>(cp);
+          } else if (cp < 0x800) {
+            key += static_cast<char>(0xC0 | (cp >> 6));
+            key += static_cast<char>(0x80 | (cp & 0x3F));
+          } else {
+            key += static_cast<char>(0xE0 | (cp >> 12));
+            key += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            key += static_cast<char>(0x80 | (cp & 0x3F));
+          }
+          pos += 4;
+        } else {
+          key += content[pos];
+        }
+      } else {
+        key += content[pos];
+      }
+      pos++;
+    }
+    if (pos < content.size()) pos++;  // skip closing "
+
+    // Skip : and whitespace
+    while (pos < content.size() && (content[pos] == ':' || content[pos] == ' '))
+      pos++;
+
+    // Parse integer value
+    if (pos < content.size() && (content[pos] == '-' || std::isdigit(static_cast<unsigned char>(content[pos])))) {
+      std::string num;
+      while (pos < content.size() && (content[pos] == '-' || std::isdigit(static_cast<unsigned char>(content[pos])))) {
+        num += content[pos++];
+      }
+      vocab[key] = std::stoll(num);
+    }
+  }
 
   return vocab;
 }
 
-// Tokenize an IPA phoneme string into Kokoro token IDs
+// Get vocab — loads from tokenizer.json once, then caches
+inline const std::unordered_map<std::string, int64_t>& GetKokoroVocab(
+    const std::string& model_dir = "") {
+  static std::unordered_map<std::string, int64_t> vocab;
+  static bool loaded = false;
+
+  if (!loaded && !model_dir.empty()) {
+    namespace fs = std::filesystem;
+    fs::path tok_path = fs::path(model_dir) / "tokenizer.json";
+    if (fs::exists(tok_path)) {
+      vocab = LoadTokenizerJson(tok_path.string());
+      if (!vocab.empty()) {
+        std::cout << "TTS vocab: " << vocab.size()
+                  << " tokens from tokenizer.json" << std::endl;
+        loaded = true;
+      }
+    }
+  }
+
+  // Minimal fallback if tokenizer.json not available
+  if (vocab.empty()) {
+    vocab = {
+        {"$", 0}, {" ", 16}, {",", 3}, {".", 4}, {"!", 5}, {"?", 6},
+        {"a", 43}, {"b", 44}, {"d", 46}, {"e", 47}, {"f", 48},
+        {"h", 50}, {"i", 51}, {"k", 53}, {"l", 54}, {"m", 55},
+        {"n", 56}, {"o", 57}, {"p", 58}, {"r", 60}, {"s", 61},
+        {"t", 62}, {"u", 63}, {"v", 64}, {"w", 65}, {"z", 68},
+    };
+    loaded = true;
+  }
+
+  return vocab;
+}
+
 inline std::vector<int64_t> PhonemeStringToTokens(const std::string& phonemes) {
   const auto& vocab = GetKokoroVocab();
   std::vector<int64_t> tokens;
-  tokens.push_back(1);  // BOS
+  tokens.push_back(0);  // Pad token '$' at start
 
   size_t i = 0;
   while (i < phonemes.size()) {
@@ -169,15 +156,8 @@ inline std::vector<int64_t> PhonemeStringToTokens(const std::string& phonemes) {
     }
 
     if (!found) {
-      // Try single ASCII character
-      std::string single(1, phonemes[i]);
-      auto it = vocab.find(single);
-      if (it != vocab.end()) {
-        tokens.push_back(it->second);
-      }
-      // Skip unknown characters (including multi-byte UTF-8 continuations)
+      // Skip unknown characters
       if ((phonemes[i] & 0xC0) == 0xC0) {
-        // Start of multi-byte: skip continuation bytes
         i++;
         while (i < phonemes.size() && (phonemes[i] & 0xC0) == 0x80) i++;
       } else {
@@ -186,7 +166,7 @@ inline std::vector<int64_t> PhonemeStringToTokens(const std::string& phonemes) {
     }
   }
 
-  tokens.push_back(2);  // EOS
+  tokens.push_back(0);  // Pad token '$' at end
   return tokens;
 }
 
