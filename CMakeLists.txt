@@ -64,12 +64,28 @@ endif()
 
 # Also try to auto-detect lib directory if not explicitly set
 if(NOT EXISTS "${GENAI_LIB_DIR}")
-    # Try: build output in build/Windows/Release/Release (source repo build layout)
-    if(EXISTS "${ORT_GENAI_PATH}/build/Windows/Release/Release")
-        set(GENAI_LIB_DIR "${ORT_GENAI_PATH}/build/Windows/Release/Release")
-    elseif(EXISTS "${ORT_GENAI_PATH}/build/Release")
-        set(GENAI_LIB_DIR "${ORT_GENAI_PATH}/build/Release")
-    endif()
+    # Try common source-build output layouts.
+    set(_genai_lib_candidates
+        "${ORT_GENAI_PATH}/build/Windows/Release/Release"
+        "${ORT_GENAI_PATH}/build/macOS/Release"
+        "${ORT_GENAI_PATH}/build/Linux/Release"
+        "${ORT_GENAI_PATH}/build/Release"
+    )
+
+    foreach(_candidate IN LISTS _genai_lib_candidates)
+        if(NOT EXISTS "${_candidate}")
+            continue()
+        endif()
+        foreach(_lib_name IN LISTS GENAI_LIB_NAMES)
+            if(EXISTS "${_candidate}/${_lib_name}")
+                set(GENAI_LIB_DIR "${_candidate}")
+                break()
+            endif()
+        endforeach()
+        if(EXISTS "${GENAI_LIB_DIR}")
+            break()
+        endif()
+    endforeach()
 endif()
 
 message(STATUS "GenAI include: ${GENAI_INCLUDE_DIR}")
@@ -106,6 +122,10 @@ if(EXISTS "${GENAI_INCLUDE_DIR}/onnxruntime_cxx_api.h")
     set(ORT_INCLUDE_DIR "${GENAI_INCLUDE_DIR}")
 elseif(EXISTS "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/build/native/include/onnxruntime_cxx_api.h")
     set(ORT_INCLUDE_DIR "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/build/native/include")
+elseif(EXISTS "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/build/native/include/onnxruntime_cxx_api.h")
+    set(ORT_INCLUDE_DIR "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/build/native/include")
+elseif(EXISTS "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/build/native/include/onnxruntime_cxx_api.h")
+    set(ORT_INCLUDE_DIR "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/build/native/include")
 elseif(EXISTS "${GENAI_LIB_DIR}/../include/onnxruntime_cxx_api.h")
     set(ORT_INCLUDE_DIR "${GENAI_LIB_DIR}/../include")
 elseif(EXISTS "${ORT_GENAI_PATH}/ort/include/onnxruntime_cxx_api.h")
