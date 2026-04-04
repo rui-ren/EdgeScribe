@@ -103,7 +103,7 @@ jobs:
       - name: Build onnxruntime-genai (macOS/Linux)
         if: runner.os != 'Windows'
         run: |
-          pip3 install requests
+          pip3 install requests --break-system-packages || pip3 install requests
           git clone --depth 1 https://github.com/microsoft/onnxruntime-genai.git genai_src
           cd genai_src
           python3 build.py --config Release --parallel

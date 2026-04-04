@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EDGESCRIBE — On-Device AI Assistant</title>
-  <link rel="stylesheet" href="css/style.css?v=3">
+  <link rel="stylesheet" href="css/style.css?v=4">
 </head>
 <body>
 
@@ -159,17 +159,41 @@
         <h2>🎤 Record &amp; Transcribe</h2>
         <span class="desc">Speak into your microphone and see your words appear in real time</span>
       </div>
-      <div class="page-body" style="display: flex; flex-direction: column; gap: 18px;">
+      <div class="page-body" style="display: flex; flex-direction: column; gap: 14px;">
 
-        <div class="transcript-area" id="live-transcript" style="flex: 1;">
-          <span class="placeholder">Your transcript will appear here once you start recording.</span>
+        <!-- Split view: Transcript + SOAP -->
+        <div class="transcript-split">
+          <div class="transcript-split-left">
+            <div class="transcript-split-header">
+              <h3>Transcript</h3>
+              <div class="btn-group">
+                <button class="btn btn-sm" id="live-copy">📋 Copy</button>
+                <button class="btn btn-sm" id="live-save">💾 Save</button>
+                <button class="btn btn-sm" id="live-clear">🗑 Clear</button>
+              </div>
+            </div>
+            <div class="transcript-area" id="live-transcript" style="flex: 1;">
+              <span class="placeholder">Your transcript will appear here once you start recording.</span>
+            </div>
+          </div>
+
+          <div class="transcript-split-right" id="soap-panel" style="display: none;">
+            <div class="transcript-split-header">
+              <h3>📝 SOAP Notes</h3>
+              <div class="btn-group">
+                <button class="btn btn-sm" id="soap-copy">📋 Copy</button>
+                <button class="btn btn-sm" id="soap-export">📄 Word</button>
+                <button class="btn btn-sm" id="soap-close">✕ Close</button>
+              </div>
+            </div>
+            <div class="soap-result markdown-body" id="soap-result" contenteditable="true" style="flex: 1;">
+            </div>
+          </div>
         </div>
 
+        <!-- Actions -->
         <div class="btn-group">
-          <button class="btn" id="live-copy">📋 Copy Text</button>
-          <button class="btn" id="live-save">💾 Save as File</button>
-          <button class="btn" id="live-soap">📝 Generate SOAP Notes</button>
-          <button class="btn" id="live-clear">🗑 Clear</button>
+          <button class="btn btn-primary" id="live-soap">📝 Generate SOAP Notes</button>
         </div>
 
         <!-- Recording controls at the bottom -->
@@ -570,7 +594,7 @@ Everything stays private — nothing is sent online.</div>
 
 <script src="js/lib/marked.min.js"></script>
 <script type="module">
-  import * as app from './js/app.js?v=16';
+  import * as app from './js/app.js?v=17';
   window.app = app;
 </script>
 
