@@ -188,14 +188,26 @@ endif()
 target_link_libraries(edgescribe PRIVATE ${GENAI_LIBRARY})
 
 # ── Link onnxruntime (needed for TTS ONNX Runtime C++ API) ──────────────────
+set(_ort_lib_candidates
+    "${GENAI_LIB_DIR}"
+    "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/runtimes/win-x64/native"
+    "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/runtimes/win-arm64/native"
+    "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/runtimes/osx-arm64/native"
+    "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/runtimes/osx-x64/native"
+    "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/runtimes/linux-x64/native"
+    "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/runtimes/linux-arm64/native"
+)
+
 find_library(ORT_LIBRARY
     NAMES onnxruntime
-    PATHS "${GENAI_LIB_DIR}"
+    PATHS ${_ort_lib_candidates}
     NO_DEFAULT_PATH
 )
 if(ORT_LIBRARY)
     target_link_libraries(edgescribe PRIVATE ${ORT_LIBRARY})
     message(STATUS "ORT lib: ${ORT_LIBRARY}")
+else()
+    message(WARNING "Could not find onnxruntime library — TTS may fail to link")
 endif()
 
 # ── Find and link llama.cpp (for LLM/Vision GGUF inference) ─────────────────

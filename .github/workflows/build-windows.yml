@@ -10,7 +10,11 @@ on:
       genai_version:
         required: false
         type: string
-        default: "0.12.0"
+        default: "0.12.2"
+      ort_version:
+        required: false
+        type: string
+        default: "1.25.0-dev-20260125-1205-727db0d3dc"
 
 jobs:
   build-windows:
@@ -71,6 +75,32 @@ jobs:
           }
 
           echo "ORT_GENAI_PATH=$genaiRoot" >> $env:GITHUB_ENV
+
+      - name: Download ONNX Runtime (matching)
+        shell: pwsh
+        run: |
+          $ortVersion = "${{ inputs.ort_version }}"
+          $ortUrl = "https://pkgs.dev.azure.com/aiinfra/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_apis/packaging/feeds/7982ae20-ed19-4a35-a362-a96ac99897b7/nuget/packages/Microsoft.ML.OnnxRuntime/versions/$ortVersion/content?api-version=6.0-preview.1"
+          Invoke-WebRequest -Uri $ortUrl -OutFile ort.nupkg
+          Expand-Archive ort.nupkg -DestinationPath ort_pkg -Force
+          Remove-Item ort.nupkg -Force
+
+          $genaiRoot = $env:ORT_GENAI_PATH
+          if (-not $genaiRoot) {
+            throw "ORT_GENAI_PATH is not set"
+          }
+
+          $ortInclude = Join-Path $pwd "ort_pkg\\build\\native\\include"
+          if (-not (Test-Path $ortInclude)) {
+            throw "Cannot find ORT include directory at $ortInclude"
+          }
+          Copy-Item -Path (Join-Path $ortInclude "*") -Destination (Join-Path $genaiRoot "include") -Recurse -Force
+
+          $ortRuntimeDir = Join-Path $pwd "ort_pkg\\runtimes\\win-x64\\native"
+          if (-not (Test-Path $ortRuntimeDir)) {
+            throw "Cannot find ORT runtime directory at $ortRuntimeDir"
+          }
+          Copy-Item -Path (Join-Path $ortRuntimeDir "*") -Destination (Join-Path $genaiRoot "lib") -Recurse -Force
 
       - name: Download webview.h
         run: |

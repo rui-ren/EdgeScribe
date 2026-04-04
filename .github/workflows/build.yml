@@ -7,11 +7,24 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  LLAMA_CPP_VERSION: "master"
+  GENAI_VERSION: "0.12.2"
+  ORT_VERSION: "1.25.0-dev-20260125-1205-727db0d3dc"
+
 jobs:
   build-windows:
     uses: ./.github/workflows/build-windows.yml
+    with:
+      llama_cpp_version: ${{ env.LLAMA_CPP_VERSION }}
+      genai_version: ${{ env.GENAI_VERSION }}
+      ort_version: ${{ env.ORT_VERSION }}
     secrets: inherit
 
   build-macos:
     uses: ./.github/workflows/build-macos.yml
+    with:
+      llama_cpp_version: ${{ env.LLAMA_CPP_VERSION }}
+      genai_version: ${{ env.GENAI_VERSION }}
+      ort_version: ${{ env.ORT_VERSION }}
     secrets: inherit
