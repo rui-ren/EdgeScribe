@@ -66,6 +66,7 @@ jobs:
           cd llama_cpp_src
           cmake -B build -DCMAKE_BUILD_TYPE=Release `
             -DGGML_VULKAN=${{ matrix.llama_vulkan }} `
+            -DLLAMA_CURL=OFF `
             -DLLAMA_BUILD_TESTS=OFF `
             -DLLAMA_BUILD_EXAMPLES=OFF `
             -DLLAMA_BUILD_SERVER=OFF
@@ -80,6 +81,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
             -DGGML_VULKAN=${{ matrix.llama_vulkan }} \
             -DGGML_METAL=${{ matrix.llama_metal }} \
+            -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_SERVER=OFF
@@ -87,37 +89,23 @@ jobs:
           cmake --install build --prefix ./install
           echo "LLAMA_CPP_PATH=${{ github.workspace }}/llama_cpp_src/install" >> $GITHUB_ENV
 
-      # ── Download onnxruntime-genai (for ASR + TTS) ──────────────────────
-      - name: Download onnxruntime-genai (Windows)
+      # ── Build onnxruntime-genai from source (for ASR + TTS) ─────────────
+      - name: Build onnxruntime-genai (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $version = "${{ env.GENAI_VERSION }}"
-          $url = "https://github.com/microsoft/onnxruntime-genai/releases/download/v${version}/onnxruntime-genai-${version}-win-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile genai.zip
-          Expand-Archive genai.zip -DestinationPath genai_extracted
-          # Find the lib and include directories
-          $genaiDir = Get-ChildItem -Path genai_extracted -Recurse -Directory | Where-Object { Test-Path (Join-Path $_.FullName "include") } | Select-Object -First 1
-          if ($genaiDir) {
-            $env:ORT_GENAI_PATH = $genaiDir.FullName
-          } else {
-            $env:ORT_GENAI_PATH = "genai_extracted"
-          }
-          echo "ORT_GENAI_PATH=$env:ORT_GENAI_PATH" >> $env:GITHUB_ENV
+          git clone --depth 1 https://github.com/microsoft/onnxruntime-genai.git genai_src
+          cd genai_src
+          python build.py --config Release --parallel
+          echo "ORT_GENAI_PATH=${{ github.workspace }}/genai_src" >> $env:GITHUB_ENV
 
-      - name: Download onnxruntime-genai (macOS/Linux)
+      - name: Build onnxruntime-genai (macOS/Linux)
         if: runner.os != 'Windows'
         run: |
-          VERSION="${{ env.GENAI_VERSION }}"
-          RID="${{ matrix.rid }}"
-          URL="https://github.com/microsoft/onnxruntime-genai/releases/download/v${VERSION}/onnxruntime-genai-${VERSION}-${RID}.tar.gz"
-          mkdir -p genai_extracted
-          curl -sL "$URL" | tar xz -C genai_extracted
-          GENAI_DIR=$(find genai_extracted -name "include" -type d | head -1 | xargs dirname)
-          if [ -z "$GENAI_DIR" ]; then
-            GENAI_DIR="genai_extracted"
-          fi
-          echo "ORT_GENAI_PATH=$GENAI_DIR" >> $GITHUB_ENV
+          git clone --depth 1 https://github.com/microsoft/onnxruntime-genai.git genai_src
+          cd genai_src
+          python3 build.py --config Release --parallel
+          echo "ORT_GENAI_PATH=${{ github.workspace }}/genai_src" >> $GITHUB_ENV
 
       # ── Download webview.h for native GUI ─────────────────────────────
       - name: Download webview.h
