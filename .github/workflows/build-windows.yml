@@ -118,8 +118,28 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\windows\openscribe.iss
-          Move-Item installer\windows\Output\OpenScribeSetup.exe OpenScribeSetup.exe
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) {
+            throw "ISCC.exe not found after Inno Setup installation"
+          }
+
+          $iss = "installer\windows\edgescribe.iss"
+          if (-not (Test-Path $iss)) {
+            throw "Installer script not found: $iss"
+          }
+
+          & $iscc $iss
+
+          $setupExe = Get-ChildItem "installer\windows\Output" -Filter "*.exe" -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $setupExe) {
+            throw "No installer executable generated under installer\\windows\\Output"
+          }
+          Copy-Item $setupExe.FullName OpenScribeSetup.exe -Force
 
       - name: Upload Installer
         uses: actions/upload-artifact@v4
