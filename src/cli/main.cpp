@@ -55,10 +55,11 @@ static void PrintUsage() {
   PrintVersion();
   std::cout << "On-device AI assistant. Speech, vision, language. Private. Open source." << std::endl;
   std::cout << std::endl;
-  std::cout << "Commands:" << std::endl;
-  std::cout << "  edgescribe pull <model>              Download a model from HuggingFace" << std::endl;
-  std::cout << "  edgescribe list                       List available and downloaded models" << std::endl;
-  std::cout << "  edgescribe remove <model>             Delete a downloaded model" << std::endl;
+  std::cout << "Model Management:" << std::endl;
+  std::cout << "  edgescribe model list                 List available and downloaded models" << std::endl;
+  std::cout << "  edgescribe model pull <name>          Download a model from HuggingFace" << std::endl;
+  std::cout << "  edgescribe model remove <name>        Delete a downloaded model" << std::endl;
+  std::cout << "  edgescribe model cache                Show cache directory and disk usage" << std::endl;
   std::cout << std::endl;
   std::cout << "Speech-to-Text (ASR):" << std::endl;
   std::cout << "  edgescribe run --live [options]       Live microphone transcription" << std::endl;
@@ -162,6 +163,41 @@ static int CmdRemove(const std::string& model_name) {
     std::cerr << "Error: " << e.what() << std::endl;
     return 1;
   }
+}
+
+// ── Command: model cache ──────────────────────────────────────────────────
+static int CmdModelCache() {
+  ModelManager manager;
+  auto cached = manager.ListCached();
+
+  std::cout << "Cache directory: " << manager.GetCacheDir() << std::endl;
+  std::cout << std::endl;
+
+  if (cached.empty()) {
+    std::cout << "No models downloaded." << std::endl;
+    return 0;
+  }
+
+  size_t total_mb = 0;
+  std::cout << std::left
+            << std::setw(16) << "Model"
+            << std::setw(12) << "Type"
+            << std::setw(12) << "Size"
+            << std::endl;
+  std::cout << std::string(40, '-') << std::endl;
+
+  for (const auto& m : cached) {
+    std::cout << std::setw(16) << m.name
+              << std::setw(12) << m.type
+              << "~" << m.size_mb << " MB"
+              << std::endl;
+    total_mb += m.size_mb;
+  }
+
+  std::cout << std::string(40, '-') << std::endl;
+  std::cout << "Total: " << cached.size() << " model(s), ~" << total_mb << " MB" << std::endl;
+
+  return 0;
 }
 
 // ── Command: devices ───────────────────────────────────────────────────────
@@ -368,9 +404,52 @@ int main(int argc, char* argv[]) {
   }
 
   // ── pull ──
+  // ── model (parent command) ──
+  if (command == "model") {
+    std::string subcmd;
+    if (argc >= 3) subcmd = argv[2];
+
+    if (subcmd == "list" || subcmd == "ls") {
+      return CmdList();
+    }
+    if (subcmd == "pull" || subcmd == "download") {
+      if (argc < 4) {
+        std::cerr << "Usage: edgescribe model pull <name> [--token <hf_token>]" << std::endl;
+        return 1;
+      }
+      std::string pull_token;
+      for (int i = 4; i < argc; i++) {
+        std::string arg = argv[i];
+        if ((arg == "--token" || arg == "-t") && i + 1 < argc) {
+          pull_token = argv[++i];
+        }
+      }
+      return CmdPull(argv[3], pull_token);
+    }
+    if (subcmd == "remove" || subcmd == "rm" || subcmd == "delete") {
+      if (argc < 4) {
+        std::cerr << "Usage: edgescribe model remove <name>" << std::endl;
+        return 1;
+      }
+      return CmdRemove(argv[3]);
+    }
+    if (subcmd == "cache") {
+      return CmdModelCache();
+    }
+
+    // No subcommand or unknown — show model help
+    std::cout << "Model management commands:" << std::endl;
+    std::cout << "  edgescribe model list                 List available and downloaded models" << std::endl;
+    std::cout << "  edgescribe model pull <name>          Download a model" << std::endl;
+    std::cout << "  edgescribe model remove <name>        Delete a downloaded model" << std::endl;
+    std::cout << "  edgescribe model cache                Show cache directory and disk usage" << std::endl;
+    return 0;
+  }
+
+  // ── Backward-compatible aliases ──
   if (command == "pull") {
     if (argc < 3) {
-      std::cerr << "Usage: edgescribe pull <model> [--token <hf_token>]" << std::endl;
+      std::cerr << "Usage: edgescribe model pull <name> [--token <hf_token>]" << std::endl;
       return 1;
     }
     std::string pull_model = argv[2];
@@ -384,15 +463,13 @@ int main(int argc, char* argv[]) {
     return CmdPull(pull_model, pull_token);
   }
 
-  // ── list ──
   if (command == "list") {
     return CmdList();
   }
 
-  // ── remove ──
   if (command == "remove" || command == "rm") {
     if (argc < 3) {
-      std::cerr << "Usage: edgescribe remove <model>" << std::endl;
+      std::cerr << "Usage: edgescribe model remove <name>" << std::endl;
       return 1;
     }
     return CmdRemove(argv[2]);

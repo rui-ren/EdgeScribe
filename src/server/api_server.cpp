@@ -370,14 +370,21 @@ void ApiServer::Impl::RegisterRoutes() {
 
   // ── GET /v1/health ──
   svr.Get("/v1/health", [this](const httplib::Request&, httplib::Response& res) {
+    // For lazy-loaded engines (ASR, TTS), report "available" if the model
+    // path is configured — not just if currently loaded in memory.
+    bool asr_available = transcriber != nullptr ||
+        (!config.asr_model.empty() && fs::exists(config.asr_model));
+    bool tts_available = tts != nullptr ||
+        (!config.tts_model.empty() && fs::exists(config.tts_model));
+
     auto body = JsonObj({
         {"status", JsonStr("ok")},
         {"version", JsonStr("0.1.0")},
         {"engines", JsonObj({
-            {"asr", JsonBool(transcriber != nullptr)},
+            {"asr", JsonBool(asr_available)},
             {"llm", JsonBool(llm != nullptr)},
             {"vision", JsonBool(vision != nullptr)},
-            {"tts", JsonBool(tts != nullptr)},
+            {"tts", JsonBool(tts_available)},
         })},
     });
     res.set_content(body, "application/json");
@@ -1035,13 +1042,11 @@ ApiServer::~ApiServer() {
 }
 
 void ApiServer::Start() {
-  std::cout << "════════════════════════════════════════════════════════════"
-            << std::endl;
+  std::cout << std::string(60, '=') << std::endl;
   std::cout << "  EDGESCRIBE API Server" << std::endl;
   std::cout << "  http://" << impl_->config.host << ":"
             << impl_->config.port << std::endl;
-  std::cout << "════════════════════════════════════════════════════════════"
-            << std::endl;
+  std::cout << std::string(60, '=') << std::endl;
   std::cout << std::endl;
 
   std::cout << "Initializing..." << std::endl;
