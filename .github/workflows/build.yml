@@ -97,7 +97,7 @@ jobs:
           pip install requests
           git clone --depth 1 https://github.com/microsoft/onnxruntime-genai.git genai_src
           cd genai_src
-          python build.py --config Release --parallel
+          python build.py --config Release --parallel --skip_tests --skip_examples
           echo "ORT_GENAI_PATH=${{ github.workspace }}/genai_src" >> $env:GITHUB_ENV
 
       - name: Build onnxruntime-genai (macOS/Linux)
@@ -106,7 +106,7 @@ jobs:
           pip3 install requests --break-system-packages || pip3 install requests
           git clone --depth 1 https://github.com/microsoft/onnxruntime-genai.git genai_src
           cd genai_src
-          python3 build.py --config Release --parallel
+          python3 build.py --config Release --parallel --skip_tests --skip_examples
           echo "ORT_GENAI_PATH=${{ github.workspace }}/genai_src" >> $GITHUB_ENV
 
       # ── Download webview.h for native GUI ─────────────────────────────
