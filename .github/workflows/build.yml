@@ -12,14 +12,10 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       llama_cpp_version: "master"
-      genai_version: "0.12.2"
-      ort_version: "1.25.0-dev-20260125-1205-727db0d3dc"
     secrets: inherit
 
   build-macos:
     uses: ./.github/workflows/build-macos.yml
     with:
       llama_cpp_version: "master"
-      genai_version: "0.12.2"
-      ort_version: "1.25.0-dev-20260125-1205-727db0d3dc"
     secrets: inherit

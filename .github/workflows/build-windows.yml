@@ -7,14 +7,6 @@ on:
         required: false
         type: string
         default: "master"
-      genai_version:
-        required: false
-        type: string
-        default: "0.12.2"
-      ort_version:
-        required: false
-        type: string
-        default: "1.25.0-dev-20260125-1205-727db0d3dc"
 
 jobs:
   build-windows:
@@ -53,54 +45,14 @@ jobs:
           cmake --build build --config Release --parallel
           echo "LLAMA_CPP_PATH=${{ github.workspace }}/llama_cpp_src" >> $env:GITHUB_ENV
 
-      - name: Download onnxruntime-genai (prebuilt)
+      - name: Build onnxruntime-genai (source)
         shell: pwsh
         run: |
-          $version = "${{ inputs.genai_version }}"
-          $url = "https://github.com/microsoft/onnxruntime-genai/releases/download/v$version/onnxruntime-genai-$version-win-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile genai.zip
-          Expand-Archive genai.zip -DestinationPath genai_extracted -Force
-          Remove-Item genai.zip -Force
-
-          $candidates = @(
-            (Join-Path $pwd "genai_extracted")
-          ) + (Get-ChildItem genai_extracted -Directory | ForEach-Object { $_.FullName })
-
-          $genaiRoot = $candidates | Where-Object {
-            (Test-Path (Join-Path $_ "include")) -and (Test-Path (Join-Path $_ "lib"))
-          } | Select-Object -First 1
-
-          if (-not $genaiRoot) {
-            throw "Could not locate onnxruntime-genai root in genai_extracted"
-          }
-
-          echo "ORT_GENAI_PATH=$genaiRoot" >> $env:GITHUB_ENV
-
-      - name: Download ONNX Runtime (matching)
-        shell: pwsh
-        run: |
-          $ortVersion = "${{ inputs.ort_version }}"
-          $ortUrl = "https://pkgs.dev.azure.com/aiinfra/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_apis/packaging/feeds/7982ae20-ed19-4a35-a362-a96ac99897b7/nuget/packages/Microsoft.ML.OnnxRuntime/versions/$ortVersion/content?api-version=6.0-preview.1"
-          Invoke-WebRequest -Uri $ortUrl -OutFile ort.nupkg
-          Expand-Archive ort.nupkg -DestinationPath ort_pkg -Force
-          Remove-Item ort.nupkg -Force
-
-          $genaiRoot = $env:ORT_GENAI_PATH
-          if (-not $genaiRoot) {
-            throw "ORT_GENAI_PATH is not set"
-          }
-
-          $ortInclude = Join-Path $pwd "ort_pkg\\build\\native\\include"
-          if (-not (Test-Path $ortInclude)) {
-            throw "Cannot find ORT include directory at $ortInclude"
-          }
-          Copy-Item -Path (Join-Path $ortInclude "*") -Destination (Join-Path $genaiRoot "include") -Recurse -Force
-
-          $ortRuntimeDir = Join-Path $pwd "ort_pkg\\runtimes\\win-x64\\native"
-          if (-not (Test-Path $ortRuntimeDir)) {
-            throw "Cannot find ORT runtime directory at $ortRuntimeDir"
-          }
-          Copy-Item -Path (Join-Path $ortRuntimeDir "*") -Destination (Join-Path $genaiRoot "lib") -Recurse -Force
+          pip install requests
+          git clone --depth 1 https://github.com/microsoft/onnxruntime-genai.git genai_src
+          cd genai_src
+          python build.py --config Release --parallel --skip_tests --skip_examples --skip_wheel
+          echo "ORT_GENAI_PATH=${{ github.workspace }}/genai_src" >> $env:GITHUB_ENV
 
       - name: Download webview.h
         run: |

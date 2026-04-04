@@ -128,6 +128,23 @@ target_include_directories(edgescribe PRIVATE
     ${GENAI_INCLUDE_DIR}
 )
 
+# Detect whether this GenAI header exposes the newer streaming ASR wrapper.
+set(EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR OFF)
+if(EXISTS "${GENAI_INCLUDE_DIR}/ort_genai.h")
+    file(READ "${GENAI_INCLUDE_DIR}/ort_genai.h" _ort_genai_header_text)
+    string(FIND "${_ort_genai_header_text}" "struct OgaStreamingProcessor" _streaming_pos)
+    if(NOT _streaming_pos EQUAL -1)
+        set(EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR ON)
+    endif()
+endif()
+
+if(EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR)
+    target_compile_definitions(edgescribe PRIVATE EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR=1)
+else()
+    target_compile_definitions(edgescribe PRIVATE EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR=0)
+    message(WARNING "GenAI headers do not provide OgaStreamingProcessor; ASR streaming will be unavailable at runtime.")
+endif()
+
 # ── Find ONNX Runtime headers (needed for TTS engine) ───────────────────────
 # ORT headers may be in either:
 # - <dir>/onnxruntime_cxx_api.h
@@ -257,6 +274,11 @@ if(LLAMA_CPP_PATH)
     find_library(GGML_BASE_LIBRARY NAMES ggml-base PATHS ${LLAMA_LIB_DIRS} NO_DEFAULT_PATH)
 
     target_include_directories(edgescribe PRIVATE ${LLAMA_INCLUDE_DIR})
+    if(EXISTS "${LLAMA_CPP_PATH}/ggml/include/ggml.h")
+        target_include_directories(edgescribe PRIVATE "${LLAMA_CPP_PATH}/ggml/include")
+    elseif(EXISTS "${LLAMA_CPP_PATH}/build/ggml/include/ggml.h")
+        target_include_directories(edgescribe PRIVATE "${LLAMA_CPP_PATH}/build/ggml/include")
+    endif()
     if(EXISTS "${LLAMA_CPP_PATH}/tools/mtmd/mtmd.h")
         target_include_directories(edgescribe PRIVATE "${LLAMA_CPP_PATH}/tools/mtmd")
     elseif(EXISTS "${LLAMA_CPP_PATH}/examples/llava/mtmd.h")

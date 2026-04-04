@@ -7,14 +7,6 @@ on:
         required: false
         type: string
         default: "master"
-      genai_version:
-        required: false
-        type: string
-        default: "0.12.2"
-      ort_version:
-        required: false
-        type: string
-        default: "1.25.0-dev-20260125-1205-727db0d3dc"
 
 jobs:
   build-macos:
@@ -45,53 +37,13 @@ jobs:
           cmake --build build --config Release --parallel
           echo "LLAMA_CPP_PATH=${{ github.workspace }}/llama_cpp_src" >> $GITHUB_ENV
 
-      - name: Download onnxruntime-genai (prebuilt)
+      - name: Build onnxruntime-genai (source)
         run: |
-          GENAI_VERSION="${{ inputs.genai_version }}"
-          mkdir -p genai_extracted
-          curl -sL "https://github.com/microsoft/onnxruntime-genai/releases/download/v${GENAI_VERSION}/onnxruntime-genai-${GENAI_VERSION}-osx-arm64.tar.gz" \
-            | tar xz -C genai_extracted
-
-          GENAI_ROOT=""
-          for candidate in genai_extracted genai_extracted/*; do
-            if [ -d "$candidate/include" ] && [ -d "$candidate/lib" ]; then
-              GENAI_ROOT="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$GENAI_ROOT" ]; then
-            echo "Could not locate onnxruntime-genai root in genai_extracted"
-            exit 1
-          fi
-
-          echo "ORT_GENAI_PATH=${{ github.workspace }}/${GENAI_ROOT}" >> $GITHUB_ENV
-
-      - name: Download ONNX Runtime (matching)
-        run: |
-          ORT_VERSION="${{ inputs.ort_version }}"
-          ORT_URL="https://pkgs.dev.azure.com/aiinfra/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_apis/packaging/feeds/7982ae20-ed19-4a35-a362-a96ac99897b7/nuget/packages/Microsoft.ML.OnnxRuntime/versions/${ORT_VERSION}/content?api-version=6.0-preview.1"
-          curl -sL "$ORT_URL" -o ort.nupkg
-          mkdir -p ort_pkg
-          unzip -q ort.nupkg -d ort_pkg
-          rm -f ort.nupkg
-
-          if [ -z "${ORT_GENAI_PATH:-}" ]; then
-            echo "ORT_GENAI_PATH is not set"
-            exit 1
-          fi
-
-          if [ ! -d ort_pkg/build/native/include ]; then
-            echo "Cannot find ORT include directory"
-            exit 1
-          fi
-          cp -R ort_pkg/build/native/include/* "${ORT_GENAI_PATH}/include/"
-
-          if [ ! -f ort_pkg/runtimes/osx-arm64/native/libonnxruntime.dylib ]; then
-            echo "Cannot find ORT macOS runtime library"
-            exit 1
-          fi
-          cp ort_pkg/runtimes/osx-arm64/native/libonnxruntime.dylib "${ORT_GENAI_PATH}/lib/"
+          pip3 install requests --break-system-packages || pip3 install requests
+          git clone --depth 1 https://github.com/microsoft/onnxruntime-genai.git genai_src
+          cd genai_src
+          python3 build.py --config Release --parallel --skip_tests --skip_examples --skip_wheel --cmake_extra_defines CMAKE_OSX_ARCHITECTURES=arm64
+          echo "ORT_GENAI_PATH=${{ github.workspace }}/genai_src" >> $GITHUB_ENV
 
       - name: Download webview.h
         run: |
