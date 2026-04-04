@@ -117,6 +117,9 @@ export async function init() {
 
   // Navigate to dashboard
   navigate('dashboard');
+
+  // Poll engine status every 10 seconds to pick up lazy-loaded models
+  setInterval(refreshHealth, 10000);
 }
 
 // ── Health check ──
@@ -251,24 +254,32 @@ async function startRecording(transcriptEl, durationEl, chunksEl) {
   source.connect(analyserNode);
   startWaveformDraw();
 
-  processor.onaudioprocess = async (e) => {
+  let pushInFlight = false;
+
+  processor.onaudioprocess = (e) => {
     if (!recording) return;
-    const pcm = e.inputBuffer.getChannelData(0);
+    const pcm = new Float32Array(e.inputBuffer.getChannelData(0));
     chunkCount++;
 
     const elapsed = ((Date.now() - recordingStartTime) / 1000).toFixed(0);
     if (durationEl) durationEl.textContent = formatDuration(parseInt(elapsed));
     if (chunksEl) chunksEl.textContent = chunkCount;
 
-    try {
-      const result = await api.transcribePush(pcm.buffer);
-      if (result.transcript) {
-        transcriptEl.innerHTML = result.transcript + '<span class="cursor"></span>';
-        transcriptEl.scrollTop = transcriptEl.scrollHeight;
-      }
-    } catch (e) {
-      // Server may be busy, skip this chunk
-    }
+    // Non-blocking: skip if previous push is still in flight
+    if (pushInFlight) return;
+    pushInFlight = true;
+
+    api.transcribePush(pcm.buffer)
+      .then(result => {
+        pushInFlight = false;
+        if (result.transcript) {
+          transcriptEl.innerHTML = result.transcript + '<span class="cursor"></span>';
+          transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        }
+      })
+      .catch(() => {
+        pushInFlight = false;
+      });
   };
 
   source.connect(processor);
