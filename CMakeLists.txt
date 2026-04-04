@@ -38,7 +38,13 @@ message(STATUS "EdgeScribe platform: ${PLATFORM_RID}")
 # ── Find or download onnxruntime-genai ───────────────────────────────────────
 if(ORT_GENAI_PATH)
     message(STATUS "Using user-provided GenAI: ${ORT_GENAI_PATH}")
-    set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}/include")
+    if(EXISTS "${ORT_GENAI_PATH}/src/ort_genai.h")
+        # Source-tree layout from onnxruntime-genai repo clone
+        set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}/src")
+    else()
+        # Installed/prebuilt layout
+        set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}/include")
+    endif()
     set(GENAI_LIB_DIR "${ORT_GENAI_PATH}/lib")
 else()
     # For local development, point to the onnxruntime-genai build output
@@ -51,14 +57,21 @@ endif()
 
 # Verify the include directory exists — try multiple layouts
 if(NOT EXISTS "${GENAI_INCLUDE_DIR}/ort_genai.h" AND NOT EXISTS "${GENAI_INCLUDE_DIR}/ort_genai_c.h")
-    # Try: headers at root
-    if(EXISTS "${ORT_GENAI_PATH}/ort_genai.h")
-        set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}")
-    # Try: headers in src/ (source repo layout)
-    elseif(EXISTS "${ORT_GENAI_PATH}/src/ort_genai.h")
-        set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}/src")
-    else()
-        message(FATAL_ERROR "Cannot find ort_genai.h in ${GENAI_INCLUDE_DIR}, ${ORT_GENAI_PATH}, or ${ORT_GENAI_PATH}/src")
+    set(_genai_include_candidates
+        "${ORT_GENAI_PATH}/src"
+        "${ORT_GENAI_PATH}/include"
+        "${ORT_GENAI_PATH}"
+    )
+
+    foreach(_candidate IN LISTS _genai_include_candidates)
+        if(EXISTS "${_candidate}/ort_genai.h" OR EXISTS "${_candidate}/ort_genai_c.h")
+            set(GENAI_INCLUDE_DIR "${_candidate}")
+            break()
+        endif()
+    endforeach()
+
+    if(NOT EXISTS "${GENAI_INCLUDE_DIR}/ort_genai.h" AND NOT EXISTS "${GENAI_INCLUDE_DIR}/ort_genai_c.h")
+        message(FATAL_ERROR "Cannot find ort_genai.h in ${ORT_GENAI_PATH}/src, ${ORT_GENAI_PATH}/include, or ${ORT_GENAI_PATH}")
     endif()
 endif()
 
@@ -116,21 +129,26 @@ target_include_directories(edgescribe PRIVATE
 )
 
 # ── Find ONNX Runtime headers (needed for TTS engine) ───────────────────────
-# ORT headers may be alongside GenAI headers or in a deps directory
+# ORT headers may be in either:
+# - <dir>/onnxruntime_cxx_api.h
+# - <dir>/onnxruntime/core/session/onnxruntime_cxx_api.h
 set(ORT_INCLUDE_DIR "")
-if(EXISTS "${GENAI_INCLUDE_DIR}/onnxruntime_cxx_api.h")
-    set(ORT_INCLUDE_DIR "${GENAI_INCLUDE_DIR}")
-elseif(EXISTS "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/build/native/include/onnxruntime_cxx_api.h")
-    set(ORT_INCLUDE_DIR "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/build/native/include")
-elseif(EXISTS "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/build/native/include/onnxruntime_cxx_api.h")
-    set(ORT_INCLUDE_DIR "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/build/native/include")
-elseif(EXISTS "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/build/native/include/onnxruntime_cxx_api.h")
-    set(ORT_INCLUDE_DIR "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/build/native/include")
-elseif(EXISTS "${GENAI_LIB_DIR}/../include/onnxruntime_cxx_api.h")
-    set(ORT_INCLUDE_DIR "${GENAI_LIB_DIR}/../include")
-elseif(EXISTS "${ORT_GENAI_PATH}/ort/include/onnxruntime_cxx_api.h")
-    set(ORT_INCLUDE_DIR "${ORT_GENAI_PATH}/ort/include")
-endif()
+set(_ort_include_candidates
+    "${GENAI_INCLUDE_DIR}"
+    "${GENAI_LIB_DIR}/../include"
+    "${ORT_GENAI_PATH}/ort/include"
+    "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/build/native/include"
+    "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/build/native/include"
+    "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/build/native/include"
+)
+
+foreach(_candidate IN LISTS _ort_include_candidates)
+    if(EXISTS "${_candidate}/onnxruntime_cxx_api.h" OR
+       EXISTS "${_candidate}/onnxruntime/core/session/onnxruntime_cxx_api.h")
+        set(ORT_INCLUDE_DIR "${_candidate}")
+        break()
+    endif()
+endforeach()
 
 if(ORT_INCLUDE_DIR)
     message(STATUS "ORT include: ${ORT_INCLUDE_DIR}")
@@ -194,49 +212,44 @@ if(LLAMA_CPP_PATH)
         message(FATAL_ERROR "Cannot find llama.h in ${LLAMA_CPP_PATH}/include or ${LLAMA_CPP_PATH}")
     endif()
 
-    # Find library directory
-    set(LLAMA_LIB_DIR "")
-    if(EXISTS "${LLAMA_CPP_PATH}/lib")
-        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/lib")
-    elseif(EXISTS "${LLAMA_CPP_PATH}/build/Release")
-        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/build/Release")
-    elseif(EXISTS "${LLAMA_CPP_PATH}/build/bin/Release")
-        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/build/bin/Release")
-    else()
-        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/lib")
-    endif()
+    # Find library directories (install and source-build layouts)
+    set(LLAMA_LIB_DIRS
+        "${LLAMA_CPP_PATH}/lib"
+        "${LLAMA_CPP_PATH}/build/src/Release"
+        "${LLAMA_CPP_PATH}/build/src"
+        "${LLAMA_CPP_PATH}/build/Release"
+        "${LLAMA_CPP_PATH}/build/bin/Release"
+        "${LLAMA_CPP_PATH}/build/bin"
+        "${LLAMA_CPP_PATH}/build/tools/mtmd/Release"
+        "${LLAMA_CPP_PATH}/build/tools/mtmd"
+    )
 
     find_library(LLAMA_LIBRARY
         NAMES llama
-        PATHS "${LLAMA_LIB_DIR}"
+        PATHS ${LLAMA_LIB_DIRS}
         NO_DEFAULT_PATH
     )
     if(NOT LLAMA_LIBRARY)
-        # Try build output directories
-        find_library(LLAMA_LIBRARY
-            NAMES llama
-            PATHS "${LLAMA_CPP_PATH}/build/src/Release"
-                  "${LLAMA_CPP_PATH}/build/Release"
-                  "${LLAMA_CPP_PATH}/build/bin/Release"
-        )
-    endif()
-
-    if(NOT LLAMA_LIBRARY)
-        message(FATAL_ERROR "Cannot find llama library in ${LLAMA_LIB_DIR}")
+        message(FATAL_ERROR "Cannot find llama library under ${LLAMA_CPP_PATH} (checked install and build output paths)")
     endif()
 
     # Find mtmd library (multimodal/vision support)
     find_library(MTMD_LIBRARY
         NAMES mtmd
-        PATHS "${LLAMA_LIB_DIR}"
+        PATHS ${LLAMA_LIB_DIRS}
         NO_DEFAULT_PATH
     )
 
     # Find ggml libraries (needed for backend device detection)
-    find_library(GGML_LIBRARY NAMES ggml PATHS "${LLAMA_LIB_DIR}" NO_DEFAULT_PATH)
-    find_library(GGML_BASE_LIBRARY NAMES ggml-base PATHS "${LLAMA_LIB_DIR}" NO_DEFAULT_PATH)
+    find_library(GGML_LIBRARY NAMES ggml PATHS ${LLAMA_LIB_DIRS} NO_DEFAULT_PATH)
+    find_library(GGML_BASE_LIBRARY NAMES ggml-base PATHS ${LLAMA_LIB_DIRS} NO_DEFAULT_PATH)
 
     target_include_directories(edgescribe PRIVATE ${LLAMA_INCLUDE_DIR})
+    if(EXISTS "${LLAMA_CPP_PATH}/tools/mtmd/mtmd.h")
+        target_include_directories(edgescribe PRIVATE "${LLAMA_CPP_PATH}/tools/mtmd")
+    elseif(EXISTS "${LLAMA_CPP_PATH}/examples/llava/mtmd.h")
+        target_include_directories(edgescribe PRIVATE "${LLAMA_CPP_PATH}/examples/llava")
+    endif()
     target_link_libraries(edgescribe PRIVATE ${LLAMA_LIBRARY})
     if(GGML_LIBRARY)
         target_link_libraries(edgescribe PRIVATE ${GGML_LIBRARY})

@@ -6,7 +6,7 @@ on:
       llama_cpp_version:
         required: false
         type: string
-        default: "b5200"
+        default: "master"
       genai_version:
         required: false
         type: string
@@ -24,7 +24,7 @@ jobs:
 
       - name: Clone llama.cpp
         run: |
-          git clone --depth 1 --branch ${{ inputs.llama_cpp_version }} https://github.com/ggerganov/llama.cpp.git llama_cpp_src
+          git clone --depth 1 --branch ${{ inputs.llama_cpp_version }} https://github.com/ggml-org/llama.cpp.git llama_cpp_src
 
       - name: Build llama.cpp
         run: |
@@ -34,12 +34,12 @@ jobs:
             -DGGML_VULKAN=OFF \
             -DGGML_METAL=ON \
             -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_SERVER=OFF
           cmake --build build --config Release --parallel
-          cmake --install build --prefix ./install
-          echo "LLAMA_CPP_PATH=${{ github.workspace }}/llama_cpp_src/install" >> $GITHUB_ENV
+          echo "LLAMA_CPP_PATH=${{ github.workspace }}/llama_cpp_src" >> $GITHUB_ENV
 
       - name: Download onnxruntime-genai (prebuilt)
         run: |
