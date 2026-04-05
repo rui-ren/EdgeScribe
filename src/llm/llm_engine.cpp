@@ -42,6 +42,14 @@ LlmEngine::LlmEngine(const std::string& model_path,
   mparams.n_gpu_layers = DetectGpuLayers(device);
 
   model_ = llama_model_load_from_file(model_path.c_str(), mparams);
+
+  // If GPU load fails (VRAM too small), retry with CPU
+  if (!model_ && mparams.n_gpu_layers > 0) {
+    std::cerr << "[llm] GPU memory insufficient, falling back to CPU\n";
+    mparams.n_gpu_layers = 0;
+    model_ = llama_model_load_from_file(model_path.c_str(), mparams);
+  }
+
   if (!model_) {
     throw std::runtime_error("Failed to load llama model: " + model_path);
   }
@@ -205,7 +213,12 @@ std::string LlmEngine::RunGeneration(const std::string& formatted_prompt,
   if (cache_valid_) {
     prefix_len = FindCommonPrefix(cached_tokens_, token_ids);
 
-    if (prefix_len < static_cast<int>(cached_tokens_.size())) {
+    if (prefix_len >= n_prompt) {
+      // Exact same prompt — trim old response tokens, keep prompt KV cached
+      llama_memory_seq_rm(llama_get_memory(ctx_), 0,
+                          static_cast<llama_pos>(n_prompt), -1);
+      prefix_len = n_prompt;  // All prompt tokens are cached
+    } else if (prefix_len < static_cast<int>(cached_tokens_.size())) {
       // Cache has diverged — remove tokens after the common prefix
       llama_memory_seq_rm(llama_get_memory(ctx_), 0,
                           static_cast<llama_pos>(prefix_len), -1);
@@ -223,7 +236,6 @@ std::string LlmEngine::RunGeneration(const std::string& formatted_prompt,
   if (n_prompt + max_length > n_ctx_) {
     max_length = n_ctx_ - n_prompt;
     if (max_length <= 0) {
-      // Context overflow — invalidate and retry with truncated history
       InvalidateCache();
       throw std::runtime_error("Prompt too long for context window");
     }
@@ -232,12 +244,25 @@ std::string LlmEngine::RunGeneration(const std::string& formatted_prompt,
   // Process ONLY new tokens (skip cached prefix)
   auto t_prompt_start = std::chrono::steady_clock::now();
   const int n_batch = llama_n_batch(ctx_);
-  for (int i = prefix_len; i < n_prompt; i += n_batch) {
-    int n_eval = std::min(n_batch, n_prompt - i);
-    llama_batch batch = llama_batch_get_one(tokens.data() + i, n_eval);
+
+  if (n_new == 0) {
+    // All prompt tokens cached — re-decode last token to set sampling position
+    llama_batch batch = llama_batch_get_one(&tokens[n_prompt - 1], 1);
+    // Remove last token from KV first, then re-decode it
+    llama_memory_seq_rm(llama_get_memory(ctx_), 0,
+                        static_cast<llama_pos>(n_prompt - 1), -1);
     if (llama_decode(ctx_, batch) != 0) {
       InvalidateCache();
-      throw std::runtime_error("Failed to decode prompt batch");
+      throw std::runtime_error("Failed to decode last prompt token");
+    }
+  } else {
+    for (int i = prefix_len; i < n_prompt; i += n_batch) {
+      int n_eval = std::min(n_batch, n_prompt - i);
+      llama_batch batch = llama_batch_get_one(tokens.data() + i, n_eval);
+      if (llama_decode(ctx_, batch) != 0) {
+        InvalidateCache();
+        throw std::runtime_error("Failed to decode prompt batch");
+      }
     }
   }
   auto t_first_token = std::chrono::steady_clock::now();

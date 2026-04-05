@@ -189,3 +189,21 @@ export async function deleteSession(id) {
   const res = await fetch(`${API}/v1/memory/sessions/${id}`, { method: 'DELETE' });
   return jsonResponse(res);
 }
+
+export async function renameSession(id, title) {
+  const res = await fetch(`${API}/v1/memory/sessions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  return jsonResponse(res);
+}
+
+export async function pinSession(id, pinned) {
+  const res = await fetch(`${API}/v1/memory/sessions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned: pinned ? 1 : 0 }),
+  });
+  return jsonResponse(res);
+}

@@ -183,11 +183,26 @@ function setupLiveTranscription() {
 
   recordBtn.addEventListener('click', async () => {
     if (!recording) {
-      await startRecording(transcriptEl, durationEl, chunksEl);
-      recordBtn.classList.add('recording');
-      recordHero?.classList.add('is-recording');
-      if (statusText) statusText.textContent = '● Recording...';
-      if (hintText) hintText.textContent = 'Tap the button again to stop';
+      // Show loading state while ASR model loads
+      recordBtn.classList.add('loading');
+      if (statusText) statusText.textContent = '⏳ Loading speech model...';
+      if (hintText) hintText.textContent = 'This may take a few seconds on first use';
+      recordBtn.disabled = true;
+
+      try {
+        await startRecording(transcriptEl, durationEl, chunksEl);
+        recordBtn.classList.remove('loading');
+        recordBtn.classList.add('recording');
+        recordHero?.classList.add('is-recording');
+        if (statusText) statusText.textContent = '● Recording...';
+        if (hintText) hintText.textContent = 'Tap the button again to stop';
+      } catch (e) {
+        recordBtn.classList.remove('loading');
+        if (statusText) statusText.textContent = 'Failed to start recording';
+        if (hintText) hintText.textContent = e.message || 'Check that the ASR model is downloaded';
+      } finally {
+        recordBtn.disabled = false;
+      }
     } else {
       await stopRecording(transcriptEl);
       recordBtn.classList.remove('recording');
@@ -522,6 +537,7 @@ function setupChat() {
       // Text-only chat mode — streaming
       appendMessage(messagesEl, 'user', text);
       chatHistory.push({ role: 'user', content: text });
+      trimChatHistory();
       updateContextIndicator();
 
       const thinkingEl = appendMessage(messagesEl, 'assistant', '');
@@ -530,18 +546,27 @@ function setupChat() {
       contentEl.textContent = '';
 
       let streamedText = '';
+      let markdownRenderTimer = null;
 
       try {
         // Try streaming endpoint first
         const result = await api.chatStream(chatHistory, (token) => {
           streamedText += token;
-          contentEl.textContent = streamedText;
-          messagesEl.scrollTop = messagesEl.scrollHeight;
+          // Throttle markdown rendering to every 100ms for performance
+          if (!markdownRenderTimer) {
+            markdownRenderTimer = setTimeout(() => {
+              contentEl.innerHTML = marked.parse(streamedText);
+              contentEl.classList.add('markdown-body');
+              messagesEl.scrollTop = messagesEl.scrollHeight;
+              markdownRenderTimer = null;
+            }, 100);
+          }
         }, 2048, currentSessionId);
 
         // Track the session ID from backend
         if (result.session_id) currentSessionId = result.session_id;
 
+        if (markdownRenderTimer) clearTimeout(markdownRenderTimer);
         contentEl.classList.remove('streaming');
         contentEl.innerHTML = marked.parse(result.text);
         chatHistory.push({ role: 'assistant', content: result.text });
@@ -580,6 +605,14 @@ function setupChat() {
     inputEl.style.height = 'auto';
     inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
   });
+
+  // Click anywhere in input wrapper to focus textarea
+  const inputWrapper = document.querySelector('.chat-input-wrapper');
+  if (inputWrapper) {
+    inputWrapper.addEventListener('click', (e) => {
+      if (e.target === inputWrapper) inputEl.focus();
+    });
+  }
 
   // Drag-and-drop images into chat
   const chatArea = document.querySelector('.chat-container');
@@ -801,10 +834,14 @@ async function loadSessionList() {
         const isActive = s.id === currentSessionId;
         html += `<div class="session-item ${isActive ? 'active' : ''}" data-id="${escapeHtml(s.id)}">
           <div class="session-item-body">
-            <div class="session-item-title">💬 ${escapeHtml(title)} · ${time}</div>
+            <div class="session-item-title">${s.pinned ? '📌 ' : '💬 '}${escapeHtml(s.title || title)} · ${time}</div>
             <div class="session-item-meta">${msgs} messages${s.model ? ' · ' + escapeHtml(s.model) : ''}</div>
           </div>
-          <button class="session-item-delete" data-delete-id="${escapeHtml(s.id)}" title="Delete">🗑</button>
+          <div class="session-item-actions">
+            <button class="session-item-pin" data-pin-id="${escapeHtml(s.id)}" data-pinned="${s.pinned ? '1' : '0'}" title="${s.pinned ? 'Unpin' : 'Pin'}">📌</button>
+            <button class="session-item-rename" data-rename-id="${escapeHtml(s.id)}" title="Rename">✏️</button>
+            <button class="session-item-delete" data-delete-id="${escapeHtml(s.id)}" title="Delete">🗑</button>
+          </div>
         </div>`;
       });
     }
@@ -813,7 +850,7 @@ async function loadSessionList() {
     // Click to load session
     listEl.querySelectorAll('.session-item').forEach(el => {
       el.addEventListener('click', (e) => {
-        if (e.target.closest('.session-item-delete')) return;
+        if (e.target.closest('.session-item-actions')) return;
         loadSession(el.dataset.id);
       });
     });
@@ -830,6 +867,42 @@ async function loadSessionList() {
           showToast('Conversation deleted', 'info');
         } catch (err) {
           showToast('Failed to delete: ' + err.message, 'error');
+        }
+      });
+    });
+
+    // Pin/unpin buttons
+    listEl.querySelectorAll('.session-item-pin').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.pinId;
+        const isPinned = btn.dataset.pinned === '1';
+        try {
+          await api.pinSession(id, !isPinned);
+          loadSessionList();
+          showToast(isPinned ? 'Unpinned' : 'Pinned', 'success');
+        } catch (err) {
+          showToast('Failed: ' + err.message, 'error');
+        }
+      });
+    });
+
+    // Rename buttons
+    listEl.querySelectorAll('.session-item-rename').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.renameId;
+        const titleEl = btn.closest('.session-item').querySelector('.session-item-title');
+        const currentTitle = titleEl?.textContent?.replace(/^[📌💬]\s*/, '').split(' · ')[0] || '';
+        const newTitle = prompt('Rename session:', currentTitle);
+        if (newTitle !== null && newTitle.trim()) {
+          try {
+            await api.renameSession(id, newTitle.trim());
+            loadSessionList();
+            showToast('Renamed', 'success');
+          } catch (err) {
+            showToast('Failed: ' + err.message, 'error');
+          }
         }
       });
     });
@@ -1367,6 +1440,25 @@ function updateContextIndicator() {
 
   const kTokens = (estimatedTokens / 1000).toFixed(1);
   label.textContent = `~${kTokens}K / 16K tokens`;
+}
+
+// Trim oldest messages to fit within context window (sliding window)
+function trimChatHistory() {
+  const maxChars = 16384 * 4; // ~16K tokens × 4 chars/token
+  const reserveChars = 8192;  // Reserve ~2K tokens for generation output
+
+  let totalChars = chatHistory.reduce((sum, m) => sum + m.content.length, 0);
+
+  // Drop oldest user+assistant pairs (keep system prompt at index 0)
+  while (totalChars > (maxChars - reserveChars) && chatHistory.length > 3) {
+    // Remove the oldest user+assistant pair after the system prompt
+    const removed1 = chatHistory.splice(1, 1)[0];
+    totalChars -= removed1.content.length;
+    if (chatHistory.length > 1 && chatHistory[1].role === 'assistant') {
+      const removed2 = chatHistory.splice(1, 1)[0];
+      totalChars -= removed2.content.length;
+    }
+  }
 }
 
 // ── Onboarding Wizard ──

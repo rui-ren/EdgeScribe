@@ -29,9 +29,10 @@ VisionEngine::VisionEngine(const std::string& model_path,
     if (level >= GGML_LOG_LEVEL_ERROR) std::cerr << text;
   }, nullptr);
 
-  // Load the LLM model
+  // Load the LLM model on CPU — the LlmEngine already has this model on GPU.
+  // Avoids double GPU allocation that crashes on small VRAM cards.
   llama_model_params mparams = llama_model_default_params();
-  mparams.n_gpu_layers = DetectGpuLayers(device);
+  mparams.n_gpu_layers = 0;
 
   model_ = llama_model_load_from_file(model_path.c_str(), mparams);
   if (!model_) {
@@ -49,6 +50,9 @@ VisionEngine::VisionEngine(const std::string& model_path,
     model_ = nullptr;
     throw std::runtime_error("Failed to create vision context");
   }
+
+  // Load mmproj on CPU only — it's a single large tensor (~781 MB)
+  // that can't be split across GPU/CPU and often exceeds VRAM
 
   // Load multimodal projector (mmproj) for vision encoding
   // Try the standard naming pattern from HuggingFace
@@ -80,6 +84,33 @@ VisionEngine::VisionEngine(const std::string& model_path,
 
   if (!mmproj_path.empty() && std::filesystem::exists(mmproj_path)) {
     auto mtmd_params = mtmd_context_params_default();
+
+    // mmproj needs ~800 MB. Require 2 GB free to account for
+    // LLM already consuming VRAM + KV cache + driver overhead.
+    constexpr size_t kMmprojVramRequired = 2048ULL * 1024 * 1024;  // 2 GB
+    bool gpu_has_space = false;
+
+    if (device != "cpu") {
+      size_t n_devices = ggml_backend_dev_count();
+      for (size_t i = 0; i < n_devices; i++) {
+        auto* dev = ggml_backend_dev_get(i);
+        auto type = ggml_backend_dev_type(dev);
+        if (type == GGML_BACKEND_DEVICE_TYPE_GPU) {
+          size_t free_mem = 0, total_mem = 0;
+          ggml_backend_dev_memory(dev, &free_mem, &total_mem);
+          std::cerr << "[vision] GPU VRAM: " << (free_mem / 1024 / 1024) 
+                    << " MB free / " << (total_mem / 1024 / 1024) << " MB total\n";
+          if (free_mem >= kMmprojVramRequired) {
+            gpu_has_space = true;
+          }
+          break;
+        }
+      }
+    }
+
+    mtmd_params.use_gpu = gpu_has_space;
+    std::cerr << "[vision] mmproj: loading on "
+              << (gpu_has_space ? "GPU" : "CPU") << "\n";
     mtmd_ctx_ = mtmd_init_from_file(mmproj_path.c_str(), model_, mtmd_params);
   }
 

@@ -58,6 +58,8 @@ struct MemoryStore::Impl {
           id         TEXT PRIMARY KEY,
           type       TEXT NOT NULL,
           model      TEXT,
+          title      TEXT,
+          pinned     INTEGER DEFAULT 0,
           started_at TEXT DEFAULT (datetime('now')),
           ended_at   TEXT
       );
@@ -84,6 +86,10 @@ struct MemoryStore::Impl {
     )";
 
     ExecSQL(db, schema);
+
+    // Migrate existing databases — add columns if missing
+    sqlite3_exec(db, "ALTER TABLE sessions ADD COLUMN title TEXT", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0", nullptr, nullptr, nullptr);
   }
 };
 
@@ -182,9 +188,9 @@ std::vector<SessionInfo> MemoryStore::GetRecentSessions(int limit) {
 
   sqlite3_stmt* stmt = nullptr;
   sqlite3_prepare_v2(impl_->db,
-      "SELECT s.id, s.type, s.model, s.started_at, s.ended_at, "
+      "SELECT s.id, s.type, s.model, s.title, s.pinned, s.started_at, s.ended_at, "
       "  (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) as msg_count "
-      "FROM sessions s ORDER BY s.started_at DESC LIMIT ?",
+      "FROM sessions s ORDER BY s.pinned DESC, s.started_at DESC LIMIT ?",
       -1, &stmt, nullptr);
   sqlite3_bind_int(stmt, 1, limit);
 
@@ -194,10 +200,13 @@ std::vector<SessionInfo> MemoryStore::GetRecentSessions(int limit) {
     info.type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
     if (sqlite3_column_text(stmt, 2))
       info.model = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-    info.started_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
-    if (sqlite3_column_text(stmt, 4))
-      info.ended_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
-    info.message_count = sqlite3_column_int(stmt, 5);
+    if (sqlite3_column_text(stmt, 3))
+      info.title = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+    info.pinned = sqlite3_column_int(stmt, 4) != 0;
+    info.started_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+    if (sqlite3_column_text(stmt, 6))
+      info.ended_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+    info.message_count = sqlite3_column_int(stmt, 7);
     sessions.push_back(info);
   }
   sqlite3_finalize(stmt);
@@ -284,6 +293,33 @@ std::vector<MessageInfo> MemoryStore::SearchMessages(const std::string& query,
   sqlite3_finalize(stmt);
 
   return messages;
+}
+
+void MemoryStore::RenameSession(const std::string& session_id,
+                                const std::string& title) {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+
+  sqlite3_stmt* stmt = nullptr;
+  sqlite3_prepare_v2(impl_->db,
+      "UPDATE sessions SET title = ? WHERE id = ?",
+      -1, &stmt, nullptr);
+  sqlite3_bind_text(stmt, 1, title.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 2, session_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+}
+
+void MemoryStore::PinSession(const std::string& session_id, bool pinned) {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+
+  sqlite3_stmt* stmt = nullptr;
+  sqlite3_prepare_v2(impl_->db,
+      "UPDATE sessions SET pinned = ? WHERE id = ?",
+      -1, &stmt, nullptr);
+  sqlite3_bind_int(stmt, 1, pinned ? 1 : 0);
+  sqlite3_bind_text(stmt, 2, session_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
 }
 
 void MemoryStore::DeleteSession(const std::string& session_id) {

@@ -934,6 +934,8 @@ void ApiServer::Impl::RegisterRoutes() {
           {"id", JsonStr(sessions[i].id)},
           {"type", JsonStr(sessions[i].type)},
           {"model", JsonStr(sessions[i].model)},
+          {"title", JsonStr(sessions[i].title)},
+          {"pinned", JsonBool(sessions[i].pinned)},
           {"started_at", JsonStr(sessions[i].started_at)},
           {"message_count", std::to_string(sessions[i].message_count)},
       });
@@ -1027,6 +1029,31 @@ void ApiServer::Impl::RegisterRoutes() {
     std::string session_id = req.matches[1];
     memory->DeleteSession(session_id);
     res.set_content(JsonObj({{"deleted", JsonStr(session_id)}}),
+                    "application/json");
+  });
+
+  // PATCH /v1/memory/sessions/:id — rename or pin a session
+  svr.Patch(R"(/v1/memory/sessions/([a-zA-Z0-9_]+))",
+            [this](const httplib::Request& req, httplib::Response& res) {
+    if (!memory) {
+      res.status = 503;
+      res.set_content(JsonObj({{"error", JsonStr("Memory store not available")}}),
+                      "application/json");
+      return;
+    }
+
+    std::string session_id = req.matches[1];
+    std::string title = ExtractJsonString(req.body, "title");
+    double pinned_val = ExtractJsonNumber(req.body, "pinned", -1);
+
+    if (!title.empty()) {
+      memory->RenameSession(session_id, title);
+    }
+    if (pinned_val >= 0) {
+      memory->PinSession(session_id, pinned_val > 0);
+    }
+
+    res.set_content(JsonObj({{"updated", JsonStr(session_id)}}),
                     "application/json");
   });
 }

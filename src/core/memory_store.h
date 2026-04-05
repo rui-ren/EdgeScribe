@@ -13,6 +13,8 @@ struct SessionInfo {
   std::string id;
   std::string type;        // "chat", "transcribe", "process"
   std::string model;
+  std::string title;
+  bool pinned = false;
   std::string started_at;
   std::string ended_at;
   int message_count = 0;
@@ -64,6 +66,10 @@ class MemoryStore {
   // Search (basic LIKE query)
   std::vector<MessageInfo> SearchMessages(const std::string& query,
                                           int limit = 20);
+
+  // Session management
+  void RenameSession(const std::string& session_id, const std::string& title);
+  void PinSession(const std::string& session_id, bool pinned);
 
   // Maintenance
   void DeleteSession(const std::string& session_id);

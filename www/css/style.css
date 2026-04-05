@@ -682,10 +682,30 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   width: 24px;
   height: 24px;
 }
+.record-btn.loading {
+  border-color: var(--accent);
+  animation: loadingPulse 1.2s ease-in-out infinite;
+  opacity: 0.7;
+  cursor: wait;
+}
+.record-btn.loading .inner {
+  background: var(--accent);
+  animation: loadingSpin 1s linear infinite;
+  border-radius: 50%;
+}
 
 @keyframes recordPulse {
   0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.3); }
   50%     { box-shadow: 0 0 0 14px rgba(239,68,68,0); }
+}
+@keyframes loadingPulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.3); }
+  50%     { box-shadow: 0 0 0 10px rgba(99,102,241,0); }
+}
+@keyframes loadingSpin {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.7); }
+  100% { transform: scale(1); }
 }
 
 /* ═══ Transcript Area ═══ */
@@ -816,18 +836,29 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   color: var(--text-muted);
   margin-top: 2px;
 }
+.session-item-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.session-item:hover .session-item-actions { opacity: 1; }
+.session-item-pin,
+.session-item-rename,
 .session-item-delete {
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
-  padding: 2px;
-  opacity: 0;
-  flex-shrink: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
 }
-.session-item:hover .session-item-delete { opacity: 1; }
-.session-item-delete:hover { color: var(--danger); }
+.session-item-pin:hover { color: var(--accent); background: var(--bg-tertiary); }
+.session-item-rename:hover { color: var(--accent); background: var(--bg-tertiary); }
+.session-item-delete:hover { color: var(--danger); background: var(--bg-tertiary); }
+.session-item-pin[data-pinned="1"] { opacity: 1; color: var(--accent); }
 
 .session-date-label {
   padding: 8px 12px 4px;
@@ -1023,6 +1054,7 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   padding: 10px 14px;
   align-items: flex-end;
   transition: border-color var(--ease), box-shadow var(--ease);
+  cursor: text;
 }
 .chat-input-wrapper:focus-within {
   border-color: var(--border-focus);
@@ -1040,6 +1072,10 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   outline: none;
   max-height: 120px;
   line-height: 1.5;
+  padding: 8px 0;
+  cursor: text;
+  width: 100%;
+  min-height: 38px;
 }
 .chat-input::placeholder { color: var(--text-muted); }
 
