@@ -251,6 +251,10 @@ if(LLAMA_CPP_PATH)
         "${LLAMA_CPP_PATH}/build/bin"
         "${LLAMA_CPP_PATH}/build/tools/mtmd/Release"
         "${LLAMA_CPP_PATH}/build/tools/mtmd"
+        "${LLAMA_CPP_PATH}/build/ggml/src/Release"
+        "${LLAMA_CPP_PATH}/build/ggml/src"
+        "${LLAMA_CPP_PATH}/build/ggml/src/ggml-vulkan/Release"
+        "${LLAMA_CPP_PATH}/build/ggml/src/ggml-vulkan"
     )
 
     find_library(LLAMA_LIBRARY
@@ -423,13 +427,25 @@ if(WIN32)
         )
     endforeach()
     # Copy llama.cpp DLLs
-    if(LLAMA_CPP_PATH AND LLAMA_LIB_DIR)
-        file(GLOB LLAMA_DLLS "${LLAMA_LIB_DIR}/*.dll")
-        # Also check bin/ directory (cmake --install puts DLLs there on Windows)
-        if(EXISTS "${LLAMA_CPP_PATH}/bin")
-            file(GLOB LLAMA_BIN_DLLS "${LLAMA_CPP_PATH}/bin/*.dll")
-            list(APPEND LLAMA_DLLS ${LLAMA_BIN_DLLS})
-        endif()
+    if(LLAMA_CPP_PATH)
+        set(LLAMA_DLLS "")
+        # Collect DLLs from all known locations
+        foreach(_dll_dir IN ITEMS
+            "${LLAMA_CPP_PATH}/lib"
+            "${LLAMA_CPP_PATH}/bin"
+            "${LLAMA_CPP_PATH}/build/bin/Release"
+            "${LLAMA_CPP_PATH}/build/bin"
+            "${LLAMA_CPP_PATH}/build/src/Release"
+            "${LLAMA_CPP_PATH}/build/ggml/src/Release"
+            "${LLAMA_CPP_PATH}/build/ggml/src/ggml-vulkan/Release"
+            "${LLAMA_CPP_PATH}/build/tools/mtmd/Release"
+        )
+            if(EXISTS "${_dll_dir}")
+                file(GLOB _found_dlls "${_dll_dir}/*.dll")
+                list(APPEND LLAMA_DLLS ${_found_dlls})
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES LLAMA_DLLS)
         foreach(DLL ${LLAMA_DLLS})
             add_custom_command(TARGET edgescribe POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DLL}" $<TARGET_FILE_DIR:edgescribe>

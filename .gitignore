@@ -20,6 +20,9 @@ out/
 *~
 .idea/
 
+dependencies
+vsconfig.json
+
 # OS
 .DS_Store
 Thumbs.db
