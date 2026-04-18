@@ -202,6 +202,12 @@ AudioOutput TtsEngine::Synthesize(const std::string& text,
   // Step 1: Convert text to IPA phonemes via espeak-ng (or fallback)
   std::string phonemes = impl_->phonemizer.TextToPhonemes(text);
 
+  // Pad short phoneme strings to avoid vocoder artifacts
+  // Kokoro's architecture produces noise/artifacts with very short inputs
+  if (phonemes.size() < 15) {
+    phonemes = "... " + phonemes + " ...";
+  }
+
   // Step 2: Convert IPA phonemes to Kokoro token IDs
   auto tokens = PhonemeStringToTokens(phonemes);
 

@@ -38,13 +38,7 @@ message(STATUS "EdgeScribe platform: ${PLATFORM_RID}")
 # ── Find or download onnxruntime-genai ───────────────────────────────────────
 if(ORT_GENAI_PATH)
     message(STATUS "Using user-provided GenAI: ${ORT_GENAI_PATH}")
-    if(EXISTS "${ORT_GENAI_PATH}/src/ort_genai.h")
-        # Source-tree layout from onnxruntime-genai repo clone
-        set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}/src")
-    else()
-        # Installed/prebuilt layout
-        set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}/include")
-    endif()
+    set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}/include")
     set(GENAI_LIB_DIR "${ORT_GENAI_PATH}/lib")
 else()
     # For local development, point to the onnxruntime-genai build output
@@ -57,48 +51,25 @@ endif()
 
 # Verify the include directory exists — try multiple layouts
 if(NOT EXISTS "${GENAI_INCLUDE_DIR}/ort_genai.h" AND NOT EXISTS "${GENAI_INCLUDE_DIR}/ort_genai_c.h")
-    set(_genai_include_candidates
-        "${ORT_GENAI_PATH}/src"
-        "${ORT_GENAI_PATH}/include"
-        "${ORT_GENAI_PATH}"
-    )
-
-    foreach(_candidate IN LISTS _genai_include_candidates)
-        if(EXISTS "${_candidate}/ort_genai.h" OR EXISTS "${_candidate}/ort_genai_c.h")
-            set(GENAI_INCLUDE_DIR "${_candidate}")
-            break()
-        endif()
-    endforeach()
-
-    if(NOT EXISTS "${GENAI_INCLUDE_DIR}/ort_genai.h" AND NOT EXISTS "${GENAI_INCLUDE_DIR}/ort_genai_c.h")
-        message(FATAL_ERROR "Cannot find ort_genai.h in ${ORT_GENAI_PATH}/src, ${ORT_GENAI_PATH}/include, or ${ORT_GENAI_PATH}")
+    # Try: headers at root
+    if(EXISTS "${ORT_GENAI_PATH}/ort_genai.h")
+        set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}")
+    # Try: headers in src/ (source repo layout)
+    elseif(EXISTS "${ORT_GENAI_PATH}/src/ort_genai.h")
+        set(GENAI_INCLUDE_DIR "${ORT_GENAI_PATH}/src")
+    else()
+        message(FATAL_ERROR "Cannot find ort_genai.h in ${GENAI_INCLUDE_DIR}, ${ORT_GENAI_PATH}, or ${ORT_GENAI_PATH}/src")
     endif()
 endif()
 
 # Also try to auto-detect lib directory if not explicitly set
 if(NOT EXISTS "${GENAI_LIB_DIR}")
-    # Try common source-build output layouts.
-    set(_genai_lib_candidates
-        "${ORT_GENAI_PATH}/build/Windows/Release/Release"
-        "${ORT_GENAI_PATH}/build/macOS/Release"
-        "${ORT_GENAI_PATH}/build/Linux/Release"
-        "${ORT_GENAI_PATH}/build/Release"
-    )
-
-    foreach(_candidate IN LISTS _genai_lib_candidates)
-        if(NOT EXISTS "${_candidate}")
-            continue()
-        endif()
-        foreach(_lib_name IN LISTS GENAI_LIB_NAMES)
-            if(EXISTS "${_candidate}/${_lib_name}")
-                set(GENAI_LIB_DIR "${_candidate}")
-                break()
-            endif()
-        endforeach()
-        if(EXISTS "${GENAI_LIB_DIR}")
-            break()
-        endif()
-    endforeach()
+    # Try: build output in build/Windows/Release/Release (source repo build layout)
+    if(EXISTS "${ORT_GENAI_PATH}/build/Windows/Release/Release")
+        set(GENAI_LIB_DIR "${ORT_GENAI_PATH}/build/Windows/Release/Release")
+    elseif(EXISTS "${ORT_GENAI_PATH}/build/Release")
+        set(GENAI_LIB_DIR "${ORT_GENAI_PATH}/build/Release")
+    endif()
 endif()
 
 message(STATUS "GenAI include: ${GENAI_INCLUDE_DIR}")
@@ -128,44 +99,18 @@ target_include_directories(edgescribe PRIVATE
     ${GENAI_INCLUDE_DIR}
 )
 
-# Detect whether this GenAI header exposes the newer streaming ASR wrapper.
-set(EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR OFF)
-if(EXISTS "${GENAI_INCLUDE_DIR}/ort_genai.h")
-    file(READ "${GENAI_INCLUDE_DIR}/ort_genai.h" _ort_genai_header_text)
-    string(FIND "${_ort_genai_header_text}" "struct OgaStreamingProcessor" _streaming_pos)
-    if(NOT _streaming_pos EQUAL -1)
-        set(EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR ON)
-    endif()
-endif()
-
-if(EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR)
-    target_compile_definitions(edgescribe PRIVATE EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR=1)
-else()
-    target_compile_definitions(edgescribe PRIVATE EDGESCRIBE_HAS_OGA_STREAMING_PROCESSOR=0)
-    message(WARNING "GenAI headers do not provide OgaStreamingProcessor; ASR streaming will be unavailable at runtime.")
-endif()
-
 # ── Find ONNX Runtime headers (needed for TTS engine) ───────────────────────
-# ORT headers may be in either:
-# - <dir>/onnxruntime_cxx_api.h
-# - <dir>/onnxruntime/core/session/onnxruntime_cxx_api.h
+# ORT headers may be alongside GenAI headers or in a deps directory
 set(ORT_INCLUDE_DIR "")
-set(_ort_include_candidates
-    "${GENAI_INCLUDE_DIR}"
-    "${GENAI_LIB_DIR}/../include"
-    "${ORT_GENAI_PATH}/ort/include"
-    "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/build/native/include"
-    "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/build/native/include"
-    "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/build/native/include"
-)
-
-foreach(_candidate IN LISTS _ort_include_candidates)
-    if(EXISTS "${_candidate}/onnxruntime_cxx_api.h" OR
-       EXISTS "${_candidate}/onnxruntime/core/session/onnxruntime_cxx_api.h")
-        set(ORT_INCLUDE_DIR "${_candidate}")
-        break()
-    endif()
-endforeach()
+if(EXISTS "${GENAI_INCLUDE_DIR}/onnxruntime_cxx_api.h")
+    set(ORT_INCLUDE_DIR "${GENAI_INCLUDE_DIR}")
+elseif(EXISTS "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/build/native/include/onnxruntime_cxx_api.h")
+    set(ORT_INCLUDE_DIR "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/build/native/include")
+elseif(EXISTS "${GENAI_LIB_DIR}/../include/onnxruntime_cxx_api.h")
+    set(ORT_INCLUDE_DIR "${GENAI_LIB_DIR}/../include")
+elseif(EXISTS "${ORT_GENAI_PATH}/ort/include/onnxruntime_cxx_api.h")
+    set(ORT_INCLUDE_DIR "${ORT_GENAI_PATH}/ort/include")
+endif()
 
 if(ORT_INCLUDE_DIR)
     message(STATUS "ORT include: ${ORT_INCLUDE_DIR}")
@@ -205,26 +150,14 @@ endif()
 target_link_libraries(edgescribe PRIVATE ${GENAI_LIBRARY})
 
 # ── Link onnxruntime (needed for TTS ONNX Runtime C++ API) ──────────────────
-set(_ort_lib_candidates
-    "${GENAI_LIB_DIR}"
-    "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/runtimes/win-x64/native"
-    "${ORT_GENAI_PATH}/build/Windows/Release/_deps/ortlib-src/runtimes/win-arm64/native"
-    "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/runtimes/osx-arm64/native"
-    "${ORT_GENAI_PATH}/build/macOS/Release/_deps/ortlib-src/runtimes/osx-x64/native"
-    "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/runtimes/linux-x64/native"
-    "${ORT_GENAI_PATH}/build/Linux/Release/_deps/ortlib-src/runtimes/linux-arm64/native"
-)
-
 find_library(ORT_LIBRARY
     NAMES onnxruntime
-    PATHS ${_ort_lib_candidates}
+    PATHS "${GENAI_LIB_DIR}"
     NO_DEFAULT_PATH
 )
 if(ORT_LIBRARY)
     target_link_libraries(edgescribe PRIVATE ${ORT_LIBRARY})
     message(STATUS "ORT lib: ${ORT_LIBRARY}")
-else()
-    message(WARNING "Could not find onnxruntime library — TTS may fail to link")
 endif()
 
 # ── Find and link llama.cpp (for LLM/Vision GGUF inference) ─────────────────
@@ -241,53 +174,49 @@ if(LLAMA_CPP_PATH)
         message(FATAL_ERROR "Cannot find llama.h in ${LLAMA_CPP_PATH}/include or ${LLAMA_CPP_PATH}")
     endif()
 
-    # Find library directories (install and source-build layouts)
-    set(LLAMA_LIB_DIRS
-        "${LLAMA_CPP_PATH}/lib"
-        "${LLAMA_CPP_PATH}/build/src/Release"
-        "${LLAMA_CPP_PATH}/build/src"
-        "${LLAMA_CPP_PATH}/build/Release"
-        "${LLAMA_CPP_PATH}/build/bin/Release"
-        "${LLAMA_CPP_PATH}/build/bin"
-        "${LLAMA_CPP_PATH}/build/tools/mtmd/Release"
-        "${LLAMA_CPP_PATH}/build/tools/mtmd"
-        "${LLAMA_CPP_PATH}/build/ggml/src/Release"
-        "${LLAMA_CPP_PATH}/build/ggml/src"
-        "${LLAMA_CPP_PATH}/build/ggml/src/ggml-vulkan/Release"
-        "${LLAMA_CPP_PATH}/build/ggml/src/ggml-vulkan"
-    )
+    # Find library directory
+    set(LLAMA_LIB_DIR "")
+    if(EXISTS "${LLAMA_CPP_PATH}/lib")
+        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/lib")
+    elseif(EXISTS "${LLAMA_CPP_PATH}/build/Release")
+        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/build/Release")
+    elseif(EXISTS "${LLAMA_CPP_PATH}/build/bin/Release")
+        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/build/bin/Release")
+    else()
+        set(LLAMA_LIB_DIR "${LLAMA_CPP_PATH}/lib")
+    endif()
 
     find_library(LLAMA_LIBRARY
         NAMES llama
-        PATHS ${LLAMA_LIB_DIRS}
+        PATHS "${LLAMA_LIB_DIR}"
         NO_DEFAULT_PATH
     )
     if(NOT LLAMA_LIBRARY)
-        message(FATAL_ERROR "Cannot find llama library under ${LLAMA_CPP_PATH} (checked install and build output paths)")
+        # Try build output directories
+        find_library(LLAMA_LIBRARY
+            NAMES llama
+            PATHS "${LLAMA_CPP_PATH}/build/src/Release"
+                  "${LLAMA_CPP_PATH}/build/Release"
+                  "${LLAMA_CPP_PATH}/build/bin/Release"
+        )
+    endif()
+
+    if(NOT LLAMA_LIBRARY)
+        message(FATAL_ERROR "Cannot find llama library in ${LLAMA_LIB_DIR}")
     endif()
 
     # Find mtmd library (multimodal/vision support)
     find_library(MTMD_LIBRARY
         NAMES mtmd
-        PATHS ${LLAMA_LIB_DIRS}
+        PATHS "${LLAMA_LIB_DIR}"
         NO_DEFAULT_PATH
     )
 
     # Find ggml libraries (needed for backend device detection)
-    find_library(GGML_LIBRARY NAMES ggml PATHS ${LLAMA_LIB_DIRS} NO_DEFAULT_PATH)
-    find_library(GGML_BASE_LIBRARY NAMES ggml-base PATHS ${LLAMA_LIB_DIRS} NO_DEFAULT_PATH)
+    find_library(GGML_LIBRARY NAMES ggml PATHS "${LLAMA_LIB_DIR}" NO_DEFAULT_PATH)
+    find_library(GGML_BASE_LIBRARY NAMES ggml-base PATHS "${LLAMA_LIB_DIR}" NO_DEFAULT_PATH)
 
     target_include_directories(edgescribe PRIVATE ${LLAMA_INCLUDE_DIR})
-    if(EXISTS "${LLAMA_CPP_PATH}/ggml/include/ggml.h")
-        target_include_directories(edgescribe PRIVATE "${LLAMA_CPP_PATH}/ggml/include")
-    elseif(EXISTS "${LLAMA_CPP_PATH}/build/ggml/include/ggml.h")
-        target_include_directories(edgescribe PRIVATE "${LLAMA_CPP_PATH}/build/ggml/include")
-    endif()
-    if(EXISTS "${LLAMA_CPP_PATH}/tools/mtmd/mtmd.h")
-        target_include_directories(edgescribe PRIVATE "${LLAMA_CPP_PATH}/tools/mtmd")
-    elseif(EXISTS "${LLAMA_CPP_PATH}/examples/llava/mtmd.h")
-        target_include_directories(edgescribe PRIVATE "${LLAMA_CPP_PATH}/examples/llava")
-    endif()
     target_link_libraries(edgescribe PRIVATE ${LLAMA_LIBRARY})
     if(GGML_LIBRARY)
         target_link_libraries(edgescribe PRIVATE ${GGML_LIBRARY})
@@ -427,25 +356,13 @@ if(WIN32)
         )
     endforeach()
     # Copy llama.cpp DLLs
-    if(LLAMA_CPP_PATH)
-        set(LLAMA_DLLS "")
-        # Collect DLLs from all known locations
-        foreach(_dll_dir IN ITEMS
-            "${LLAMA_CPP_PATH}/lib"
-            "${LLAMA_CPP_PATH}/bin"
-            "${LLAMA_CPP_PATH}/build/bin/Release"
-            "${LLAMA_CPP_PATH}/build/bin"
-            "${LLAMA_CPP_PATH}/build/src/Release"
-            "${LLAMA_CPP_PATH}/build/ggml/src/Release"
-            "${LLAMA_CPP_PATH}/build/ggml/src/ggml-vulkan/Release"
-            "${LLAMA_CPP_PATH}/build/tools/mtmd/Release"
-        )
-            if(EXISTS "${_dll_dir}")
-                file(GLOB _found_dlls "${_dll_dir}/*.dll")
-                list(APPEND LLAMA_DLLS ${_found_dlls})
-            endif()
-        endforeach()
-        list(REMOVE_DUPLICATES LLAMA_DLLS)
+    if(LLAMA_CPP_PATH AND LLAMA_LIB_DIR)
+        file(GLOB LLAMA_DLLS "${LLAMA_LIB_DIR}/*.dll")
+        # Also check bin/ directory (cmake --install puts DLLs there on Windows)
+        if(EXISTS "${LLAMA_CPP_PATH}/bin")
+            file(GLOB LLAMA_BIN_DLLS "${LLAMA_CPP_PATH}/bin/*.dll")
+            list(APPEND LLAMA_DLLS ${LLAMA_BIN_DLLS})
+        endif()
         foreach(DLL ${LLAMA_DLLS})
             add_custom_command(TARGET edgescribe POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DLL}" $<TARGET_FILE_DIR:edgescribe>

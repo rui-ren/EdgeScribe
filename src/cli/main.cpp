@@ -484,7 +484,7 @@ int main(int argc, char* argv[]) {
   if (command == "chat") {
     std::string model_name = "qwen3-vl";
     std::string output_file;
-    std::string device = "";  // Auto GPU
+    std::string device = "cpu";
     std::string prompt;
     bool interactive = false;
 
@@ -1081,7 +1081,7 @@ int main(int argc, char* argv[]) {
   if (command == "serve") {
     int port = 8080;
     std::string host = "127.0.0.1";
-    std::string device = "";  // Empty = auto-detect GPU, fallback to CPU
+    std::string device = "cpu";
     std::string asr_model;
     std::string vlm_model;
     std::string tts_model;
