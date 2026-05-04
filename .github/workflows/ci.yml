@@ -13,7 +13,7 @@ on:
 
 # Pinned dependency versions — update these intentionally, not by accident
 env:
-  LLAMA_CPP_TAG: "b5478"
+  LLAMA_CPP_TAG: "b8580"
   ORT_GENAI_TAG: "v0.12.2"
 
 jobs:
@@ -79,7 +79,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release `
             -DGGML_VULKAN=ON `
             -DLLAMA_CURL=OFF `
-            -DLLAMA_BUILD_TOOLS=OFF `
+            -DLLAMA_BUILD_TOOLS=ON `
             -DLLAMA_BUILD_TESTS=OFF `
             -DLLAMA_BUILD_EXAMPLES=OFF `
             -DLLAMA_BUILD_SERVER=OFF
@@ -162,7 +162,7 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DGGML_METAL=ON \
             -DLLAMA_CURL=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_SERVER=OFF
