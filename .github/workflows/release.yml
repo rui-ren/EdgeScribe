@@ -95,7 +95,7 @@ jobs:
       # ── Build onnxruntime-genai ──────────────────────────────────────────
       - name: Clone onnxruntime-genai
         if: steps.cache-genai.outputs.cache-hit != 'true'
-        run: git clone --depth 1 --tag ${{ env.ORT_GENAI_TAG }} https://github.com/microsoft/onnxruntime-genai.git genai_src
+        run: git clone --depth 1 --branch ${{ env.ORT_GENAI_TAG }} https://github.com/microsoft/onnxruntime-genai.git genai_src
 
       - name: Build onnxruntime-genai
         if: steps.cache-genai.outputs.cache-hit != 'true'
@@ -223,7 +223,7 @@ jobs:
 
       - name: Clone onnxruntime-genai
         if: steps.cache-genai.outputs.cache-hit != 'true'
-        run: git clone --depth 1 --tag ${{ env.ORT_GENAI_TAG }} https://github.com/microsoft/onnxruntime-genai.git genai_src
+        run: git clone --depth 1 --branch ${{ env.ORT_GENAI_TAG }} https://github.com/microsoft/onnxruntime-genai.git genai_src
 
       - name: Build onnxruntime-genai
         if: steps.cache-genai.outputs.cache-hit != 'true'
