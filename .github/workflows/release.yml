@@ -1,0 +1,296 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Release Pipeline — Build + Package + Publish
+# Manually triggered only. Creates GitHub Release with platform artifacts.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., v1.0.0)"
+        required: true
+        type: string
+      draft:
+        description: "Create as draft release?"
+        required: false
+        type: boolean
+        default: true
+
+env:
+  LLAMA_CPP_TAG: "b5478"
+  ORT_GENAI_TAG: "v0.12.2"
+
+jobs:
+  # ── Windows Release Build ──────────────────────────────────────────────────
+  release-windows:
+    runs-on: windows-latest
+    name: Release Windows x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Dependency cache (same keys as CI) ───────────────────────────────
+      - name: Cache Vulkan SDK
+        id: cache-vulkan
+        uses: actions/cache@v4
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-windows-1.4
+
+      - name: Cache llama.cpp install
+        id: cache-llama
+        uses: actions/cache@v4
+        with:
+          path: llama_cpp_install
+          key: llama-win-x64-vulkan-${{ env.LLAMA_CPP_TAG }}
+
+      - name: Cache onnxruntime-genai install
+        id: cache-genai
+        uses: actions/cache@v4
+        with:
+          path: genai_install
+          key: ort-genai-win-x64-${{ env.ORT_GENAI_TAG }}
+
+      # ── Download headers ─────────────────────────────────────────────────
+      - name: Download miniaudio.h
+        run: curl -sL -o include/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h
+
+      # ── Vulkan SDK ───────────────────────────────────────────────────────
+      - name: Install Vulkan SDK
+        if: steps.cache-vulkan.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile vulkan-sdk.exe
+          Start-Process -FilePath .\vulkan-sdk.exe -ArgumentList "--accept-licenses --default-answer --confirm-command install" -Wait
+          Remove-Item vulkan-sdk.exe -Force
+
+      - name: Set Vulkan env
+        shell: pwsh
+        run: |
+          $sdkPath = Get-ChildItem "C:\VulkanSDK" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          echo "VULKAN_SDK=$($sdkPath.FullName)" >> $env:GITHUB_ENV
+
+      # ── Build llama.cpp ──────────────────────────────────────────────────
+      - name: Clone llama.cpp
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --branch ${{ env.LLAMA_CPP_TAG }} https://github.com/ggml-org/llama.cpp.git llama_cpp_src
+
+      - name: Build llama.cpp
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          cd llama_cpp_src
+          cmake -B build -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_VULKAN=ON `
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_BUILD_TOOLS=OFF `
+            -DLLAMA_BUILD_TESTS=OFF `
+            -DLLAMA_BUILD_EXAMPLES=OFF `
+            -DLLAMA_BUILD_SERVER=OFF
+          cmake --build build --config Release --parallel
+          cmake --install build --prefix "${{ github.workspace }}/llama_cpp_install" --config Release
+
+      # ── Build onnxruntime-genai ──────────────────────────────────────────
+      - name: Clone onnxruntime-genai
+        if: steps.cache-genai.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --tag ${{ env.ORT_GENAI_TAG }} https://github.com/microsoft/onnxruntime-genai.git genai_src
+
+      - name: Build onnxruntime-genai
+        if: steps.cache-genai.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          pip install requests
+          cd genai_src
+          python build.py --config Release --parallel --skip_tests --skip_examples --skip_wheel
+          New-Item -ItemType Directory -Path "${{ github.workspace }}/genai_install" -Force
+          Copy-Item -Recurse src "${{ github.workspace }}/genai_install/src"
+          Copy-Item -Recurse build "${{ github.workspace }}/genai_install/build"
+
+      # ── Build EDGESCRIBE ─────────────────────────────────────────────────
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release `
+            -DORT_GENAI_PATH="${{ github.workspace }}/genai_install" `
+            -DLLAMA_CPP_PATH="${{ github.workspace }}/llama_cpp_install"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # ── Install espeak-ng ────────────────────────────────────────────────
+      - name: Install espeak-ng
+        shell: pwsh
+        run: choco install espeak-ng -y --no-progress
+
+      # ── Package ──────────────────────────────────────────────────────────
+      - name: Package
+        shell: pwsh
+        run: |
+          $outDir = "openscribe-win-x64"
+          New-Item -ItemType Directory -Path $outDir -Force
+
+          # Binary + DLLs
+          Copy-Item build/Release/edgescribe.exe $outDir/
+          Copy-Item build/Release/*.dll $outDir/ -ErrorAction SilentlyContinue
+
+          # Frontend
+          Copy-Item -Recurse www $outDir/www
+
+          # Docs
+          Copy-Item README.md $outDir/
+          Copy-Item LICENSE $outDir/
+
+          # espeak-ng
+          $espeakDir = "C:\Program Files\eSpeak NG"
+          if (Test-Path $espeakDir) {
+            Copy-Item "$espeakDir\libespeak-ng.dll" $outDir/
+            Copy-Item -Recurse "$espeakDir\espeak-ng-data" "$outDir\espeak-ng-data"
+          }
+
+          # VC++ redistributable
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" `
+            -OutFile "$outDir/vc_redist_x64.exe" -UseBasicParsing
+
+          Compress-Archive -Path $outDir -DestinationPath "openscribe-win-x64.zip"
+
+      # ── Windows Installer ────────────────────────────────────────────────
+      - name: Build Installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
+          $iss = "installer\windows\edgescribe.iss"
+          if (Test-Path $iss) {
+            & $iscc $iss
+            $setup = Get-ChildItem "installer\windows\Output" -Filter "*.exe" | Select-Object -First 1
+            if ($setup) { Copy-Item $setup.FullName OpenScribeSetup.exe -Force }
+          }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            openscribe-win-x64.zip
+            OpenScribeSetup.exe
+
+  # ── macOS Release Build ────────────────────────────────────────────────────
+  release-macos:
+    runs-on: macos-14
+    name: Release macOS ARM64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache llama.cpp install
+        id: cache-llama
+        uses: actions/cache@v4
+        with:
+          path: llama_cpp_install
+          key: llama-osx-arm64-metal-${{ env.LLAMA_CPP_TAG }}
+
+      - name: Cache onnxruntime-genai install
+        id: cache-genai
+        uses: actions/cache@v4
+        with:
+          path: genai_install
+          key: ort-genai-osx-arm64-${{ env.ORT_GENAI_TAG }}
+
+      - name: Download miniaudio.h
+        run: curl -sL -o include/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h
+
+      - name: Clone llama.cpp
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --branch ${{ env.LLAMA_CPP_TAG }} https://github.com/ggml-org/llama.cpp.git llama_cpp_src
+
+      - name: Build llama.cpp
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: |
+          cd llama_cpp_src
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DGGML_METAL=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF
+          cmake --build build --config Release --parallel
+          cmake --install build --prefix "${{ github.workspace }}/llama_cpp_install"
+
+      - name: Clone onnxruntime-genai
+        if: steps.cache-genai.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --tag ${{ env.ORT_GENAI_TAG }} https://github.com/microsoft/onnxruntime-genai.git genai_src
+
+      - name: Build onnxruntime-genai
+        if: steps.cache-genai.outputs.cache-hit != 'true'
+        run: |
+          pip3 install requests --break-system-packages || pip3 install requests
+          cd genai_src
+          python3 build.py --config Release --parallel --skip_tests --skip_examples --skip_wheel \
+            --cmake_extra_defines CMAKE_OSX_ARCHITECTURES=arm64
+          mkdir -p "${{ github.workspace }}/genai_install"
+          cp -r src "${{ github.workspace }}/genai_install/src"
+          cp -r build "${{ github.workspace }}/genai_install/build"
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DORT_GENAI_PATH=${{ github.workspace }}/genai_install \
+            -DLLAMA_CPP_PATH=${{ github.workspace }}/llama_cpp_install
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Install espeak-ng
+        run: brew install espeak-ng
+
+      - name: Package
+        run: |
+          OUT_DIR="openscribe-osx-arm64"
+          mkdir -p "$OUT_DIR"
+          cp build/edgescribe "$OUT_DIR/"
+          cp build/*.dylib "$OUT_DIR/" 2>/dev/null || true
+          cp build/*.so* "$OUT_DIR/" 2>/dev/null || true
+          cp -r www "$OUT_DIR/www"
+          cp README.md "$OUT_DIR/"
+          cp LICENSE "$OUT_DIR/"
+          ESPEAK_LIB=$(brew --prefix espeak-ng)/lib/libespeak-ng.dylib
+          ESPEAK_DATA=$(brew --prefix espeak-ng)/share/espeak-ng-data
+          [ -f "$ESPEAK_LIB" ] && cp "$ESPEAK_LIB" "$OUT_DIR/"
+          [ -d "$ESPEAK_DATA" ] && cp -r "$ESPEAK_DATA" "$OUT_DIR/espeak-ng-data"
+          tar czf "openscribe-osx-arm64.tar.gz" "$OUT_DIR"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: openscribe-osx-arm64.tar.gz
+
+  # ── Create GitHub Release ──────────────────────────────────────────────────
+  publish:
+    needs: [release-windows, release-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: "EDGESCRIBE ${{ inputs.version }}"
+          draft: ${{ inputs.draft }}
+          generate_release_notes: true
+          files: |
+            openscribe-win-x64.zip
+            OpenScribeSetup.exe
+            openscribe-osx-arm64.tar.gz

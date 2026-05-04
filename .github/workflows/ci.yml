@@ -1,0 +1,205 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# CI Pipeline — Build Validation
+# Runs on every push and PR. Does NOT publish artifacts or create releases.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Pinned dependency versions — update these intentionally, not by accident
+env:
+  LLAMA_CPP_TAG: "b5478"
+  ORT_GENAI_TAG: "v0.12.2"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    name: Windows x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Dependency cache ─────────────────────────────────────────────────
+      - name: Cache Vulkan SDK
+        id: cache-vulkan
+        uses: actions/cache@v4
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-windows-1.4
+
+      - name: Cache llama.cpp install
+        id: cache-llama
+        uses: actions/cache@v4
+        with:
+          path: llama_cpp_install
+          key: llama-win-x64-vulkan-${{ env.LLAMA_CPP_TAG }}
+
+      - name: Cache onnxruntime-genai install
+        id: cache-genai
+        uses: actions/cache@v4
+        with:
+          path: genai_install
+          key: ort-genai-win-x64-${{ env.ORT_GENAI_TAG }}
+
+      # ── Download headers ─────────────────────────────────────────────────
+      - name: Download miniaudio.h
+        run: curl -sL -o include/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h
+
+      # ── Vulkan SDK ───────────────────────────────────────────────────────
+      - name: Install Vulkan SDK
+        if: steps.cache-vulkan.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
+          Invoke-WebRequest -Uri $url -OutFile vulkan-sdk.exe
+          Start-Process -FilePath .\vulkan-sdk.exe -ArgumentList "--accept-licenses --default-answer --confirm-command install" -Wait
+          Remove-Item vulkan-sdk.exe -Force
+
+      - name: Set Vulkan env
+        shell: pwsh
+        run: |
+          $sdkPath = Get-ChildItem "C:\VulkanSDK" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          echo "VULKAN_SDK=$($sdkPath.FullName)" >> $env:GITHUB_ENV
+
+      # ── Build llama.cpp ──────────────────────────────────────────────────
+      - name: Clone llama.cpp
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --branch ${{ env.LLAMA_CPP_TAG }} https://github.com/ggml-org/llama.cpp.git llama_cpp_src
+
+      - name: Build llama.cpp
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          cd llama_cpp_src
+          cmake -B build -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_VULKAN=ON `
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_BUILD_TOOLS=OFF `
+            -DLLAMA_BUILD_TESTS=OFF `
+            -DLLAMA_BUILD_EXAMPLES=OFF `
+            -DLLAMA_BUILD_SERVER=OFF
+          cmake --build build --config Release --parallel
+          cmake --install build --prefix "${{ github.workspace }}/llama_cpp_install" --config Release
+
+      # ── Build onnxruntime-genai ──────────────────────────────────────────
+      - name: Clone onnxruntime-genai
+        if: steps.cache-genai.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --tag ${{ env.ORT_GENAI_TAG }} https://github.com/microsoft/onnxruntime-genai.git genai_src
+
+      - name: Build onnxruntime-genai
+        if: steps.cache-genai.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          pip install requests
+          cd genai_src
+          python build.py --config Release --parallel --skip_tests --skip_examples --skip_wheel
+          # Copy outputs to clean install prefix
+          New-Item -ItemType Directory -Path "${{ github.workspace }}/genai_install" -Force
+          Copy-Item -Recurse src "${{ github.workspace }}/genai_install/src"
+          Copy-Item -Recurse build "${{ github.workspace }}/genai_install/build"
+
+      # ── Configure & Build EDGESCRIBE ─────────────────────────────────────
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release `
+            -DORT_GENAI_PATH="${{ github.workspace }}/genai_install" `
+            -DLLAMA_CPP_PATH="${{ github.workspace }}/llama_cpp_install"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Verify binary
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "build/Release/edgescribe.exe")) {
+            throw "Build failed — edgescribe.exe not found"
+          }
+          $size = [math]::Round((Get-Item "build/Release/edgescribe.exe").Length / 1MB, 2)
+          Write-Host "Build succeeded: edgescribe.exe ($size MB)"
+
+  build-macos:
+    runs-on: macos-14
+    name: macOS ARM64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Dependency cache ─────────────────────────────────────────────────
+      - name: Cache llama.cpp install
+        id: cache-llama
+        uses: actions/cache@v4
+        with:
+          path: llama_cpp_install
+          key: llama-osx-arm64-metal-${{ env.LLAMA_CPP_TAG }}
+
+      - name: Cache onnxruntime-genai install
+        id: cache-genai
+        uses: actions/cache@v4
+        with:
+          path: genai_install
+          key: ort-genai-osx-arm64-${{ env.ORT_GENAI_TAG }}
+
+      # ── Download headers ─────────────────────────────────────────────────
+      - name: Download miniaudio.h
+        run: curl -sL -o include/miniaudio.h https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h
+
+      # ── Build llama.cpp ──────────────────────────────────────────────────
+      - name: Clone llama.cpp
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --branch ${{ env.LLAMA_CPP_TAG }} https://github.com/ggml-org/llama.cpp.git llama_cpp_src
+
+      - name: Build llama.cpp
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: |
+          cd llama_cpp_src
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DGGML_METAL=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF
+          cmake --build build --config Release --parallel
+          cmake --install build --prefix "${{ github.workspace }}/llama_cpp_install"
+
+      # ── Build onnxruntime-genai ──────────────────────────────────────────
+      - name: Clone onnxruntime-genai
+        if: steps.cache-genai.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --tag ${{ env.ORT_GENAI_TAG }} https://github.com/microsoft/onnxruntime-genai.git genai_src
+
+      - name: Build onnxruntime-genai
+        if: steps.cache-genai.outputs.cache-hit != 'true'
+        run: |
+          pip3 install requests --break-system-packages || pip3 install requests
+          cd genai_src
+          python3 build.py --config Release --parallel --skip_tests --skip_examples --skip_wheel \
+            --cmake_extra_defines CMAKE_OSX_ARCHITECTURES=arm64
+          mkdir -p "${{ github.workspace }}/genai_install"
+          cp -r src "${{ github.workspace }}/genai_install/src"
+          cp -r build "${{ github.workspace }}/genai_install/build"
+
+      # ── Configure & Build EDGESCRIBE ─────────────────────────────────────
+      - name: Configure CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DORT_GENAI_PATH=${{ github.workspace }}/genai_install \
+            -DLLAMA_CPP_PATH=${{ github.workspace }}/llama_cpp_install
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Verify binary
+        run: |
+          if [ ! -f "build/edgescribe" ]; then
+            echo "Build failed — edgescribe binary not found"
+            exit 1
+          fi
+          echo "Build succeeded: $(du -h build/edgescribe | cut -f1)"
