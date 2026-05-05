@@ -275,7 +275,7 @@ std::string LlmEngine::RunGeneration(const std::string& formatted_prompt,
   while (n_generated < max_length) {
     llama_token token = llama_sampler_sample(sampler_, ctx_, -1);
 
-    if (llama_token_is_eog(vocab, token)) {
+    if (llama_vocab_is_eog(vocab, token)) {
       break;
     }
 

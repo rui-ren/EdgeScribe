@@ -2,88 +2,98 @@
 
 **On-device AI for speech, vision, and language. Private. Open source.**
 
-EDGESCRIBE is a fully open-source, cross-platform AI assistant that runs entirely on your device. Speech-to-text, image understanding, document OCR, and text-to-speech — all local, all private.
+<p align="center">
+  <img src="doc/assets/edgescribe-ui.png" alt="EDGESCRIBE Web UI" width="800">
+  <br>
+  <em>Built-in web UI — chat, transcribe, OCR, and speak — all running locally on your device.</em>
+</p>
 
-Built for privacy-first use cases like HIPAA-compliant medical transcription, meeting notes, and accessibility.
+EDGESCRIBE is a fully open-source, on-device AI assistant for medical transcription, document OCR, and clinical note generation. Speech-to-text, image understanding, LLM chat, and text-to-speech — all local, all private, zero cloud dependencies.
 
-## Features
+## ✨ Key Features
 
-- **100% on-device** — All processing happens locally. Zero network calls during use.
-- **GPU accelerated** — Vulkan (Windows, any GPU) and Metal (macOS). Auto-detects GPU, falls back to CPU.
-- **Cross-platform** — Windows x64 and macOS Apple Silicon (M1/M2/M3/M4). Linux and macOS Intel planned.
-- **4-engine AI stack** — ASR + Vision + LLM + TTS in only ~1.7 GB.
-- **Real-time transcription** — Live microphone to text with streaming output.
-- **Vision & OCR** — Analyze images, extract text from documents.
-- **LLM chat** — Local language model for SOAP notes, summaries, terminology fixes.
-- **Text-to-speech** — Natural voice output via Kokoro ONNX.
-- **Ollama-style CLI** — Simple `pull` / `run` / `list` commands.
-- **Small footprint** — ~2 MB app + ~80 MB runtime. Models downloaded separately.
-- **CPU-capable** — No GPU required. Runs on any modern laptop.
-- **MIT licensed** — Fully open source. Auditable by anyone.
+| Feature | Description |
+|---------|-------------|
+| 🎤 **Real-time ASR** | Live microphone → text, streaming output |
+| 🧠 **LLM Chat** | SOAP notes, summarization, terminology correction |
+| 🖼️ **Vision & OCR** | Analyze images, extract text from prescriptions and documents |
+| 🔊 **Text-to-Speech** | Natural voice readback with Kokoro |
+| 🌐 **Web UI + REST API** | Built-in frontend at `localhost:8080`, REST API for integration |
+| 🔒 **100% Private** | Zero network calls during use. HIPAA-friendly by design |
+| ⚡ **GPU Accelerated** | Vulkan (NVIDIA/AMD/Intel) + Metal (macOS). Auto-fallback to CPU |
+| 📦 **Tiny Footprint** | ~2 MB binary + ~80 MB runtime DLLs. Models downloaded separately |
+| 🔧 **Ollama-style CLI** | `pull` / `run` / `chat` / `serve` — familiar workflow |
 
-## Why Native C++? Performance by Design
+## Architecture
 
-EDGESCRIBE is built as a **single native C++ binary** where the HTTP server, inference engines, and audio pipeline all run **in the same process**. This is a deliberate architectural choice for maximum edge performance.
+```
+edgescribe.exe (single C++ binary)
+├── llama.cpp          → LLM + Vision (Qwen3-VL, GGUF, GPU via Vulkan/Metal)
+├── onnxruntime-genai  → ASR (Nemotron Parakeet 0.6B, ONNX)
+├── onnxruntime        → TTS (Kokoro 82M, ONNX, espeak-ng phonemizer)
+├── httplib.h          → REST API server + Web UI
+└── miniaudio.h        → Cross-platform audio capture/playback
+```
 
-### How EDGESCRIBE compares
+### Inference Stack
 
-| | EDGESCRIBE (C++) | Ollama (Go) | LM Studio (Electron) | Jan.ai (Tauri) |
-|---|---|---|---|---|
-| **Inference engine** | llama.cpp + ONNX Runtime | llama.cpp | llama.cpp | llama.cpp (via Cortex.cpp) |
-| **Server / shell** | C++ (httplib.h) | Go HTTP server | Node.js (Electron) | Rust shell (Tauri) + C++ (Cortex) |
-| **Frontend** | Vanilla HTML/JS | None (CLI) | React (Electron) | React (Tauri) |
-| **FFI boundary** | ✅ None — all C++ | ⚠️ CGO bridge | ⚠️ Node.js ↔ C++ | ⚠️ TS ↔ C++ |
-| **Binary size** | ~2 MB | ~30 MB | ~400 MB | ~80 MB |
-| **RAM overhead** | ~5 MB (no runtime) | ~30 MB (Go) | ~300 MB (Chromium) | ~50 MB (Tauri) |
-| **GC pauses** | ✅ None | ⚠️ Go GC | ⚠️ V8 GC | ⚠️ V8 GC (webview) |
-| **Multi-modal** | ✅ ASR + LLM + Vision + TTS | Text + Vision | Text + Vision | Text + Vision |
-| **Focus** | Medical / domain-specific | Developer API | Consumer chat UI | "Open ChatGPT" |
-| **Deployment** | Single binary, zero deps | Single binary | Installer | Installer |
+| Engine | Model | Format | Runtime | GPU | Size |
+|--------|-------|--------|---------|-----|------|
+| ASR | Parakeet TDT 0.6B | ONNX | onnxruntime-genai | CPU (lazy-loaded) | ~670 MB |
+| LLM | Qwen3-VL-2B Q4_K_M | GGUF | llama.cpp | Auto GPU (mmap) | ~1.0 GB |
+| Vision | Qwen3-VL mmproj | GGUF | llama.cpp + mtmd | CPU (auto VRAM check) | ~781 MB |
+| TTS | Kokoro 82M | ONNX | onnxruntime | CPU (lazy-loaded) | ~330 MB |
 
-### Why this matters on your laptop
+### Memory Management
 
-Most local AI tools (Ollama, LM Studio, etc.) use Go or Python servers that call into C/C++ inference libraries through a **foreign function interface (FFI)**. Every token, every audio chunk, every image crosses a language boundary — adding latency and memory overhead.
+- **LLM/Vision**: Loaded via `mmap` — near-zero idle RAM, OS manages pages automatically
+- **ASR/TTS**: Lazy-loaded on first request, auto-unloaded after 5 min idle
+- **KV Cache**: Prefix caching across multi-turn chat — only new tokens processed
 
-EDGESCRIBE eliminates this entirely. The HTTP server ([cpp-httplib](https://github.com/yhirose/cpp-httplib)) and inference engines ([llama.cpp](https://github.com/ggerganov/llama.cpp) for LLM/Vision, [ONNX Runtime](https://github.com/microsoft/onnxruntime) for ASR/TTS) share the same address space. Inference output flows directly to the HTTP response with **zero serialization, zero copies, zero boundary crossings**.
+See [doc/RAM-memory-management.md](doc/RAM-memory-management.md) for details.
 
-The result: lower latency, lower memory usage, and smoother real-time streaming — especially noticeable on laptops without dedicated GPUs.
+---
 
 ## Quick Start
 
 ### 1. Download
 
-Grab the latest release for your platform from [Releases](https://github.com/EDGESCRIBE/EDGESCRIBE/releases):
+Grab the latest release from [Releases](https://github.com/rui-ren/EdgeScribe/releases):
 
-| Platform | Download |
-|----------|----------|
-| Windows x64 | `EDGESCRIBE-win-x64.zip` |
-| macOS Apple Silicon | `EDGESCRIBE-osx-arm64.tar.gz` |
+| Platform | Download | GPU |
+|----------|----------|-----|
+| Windows x64 | `openscribe-win-x64.zip` | Vulkan (auto-fallback to CPU) |
+| macOS Apple Silicon | `openscribe-osx-arm64.tar.gz` | Metal |
+
+Windows users: run `vc_redist_x64.exe` (included) if you get DLL errors.
 
 ### 2. Download Models
 
 ```bash
-# Speech-to-text (required, ~670 MB)
-edgescribe pull nemotron
-
-# Vision + language — OCR, SOAP notes (optional, ~1.8 GB)
-edgescribe pull qwen3-vl
-
-# Text-to-speech (optional, ~310 MB)
-edgescribe pull kokoro
+edgescribe pull nemotron    # ASR — speech-to-text (~670 MB)
+edgescribe pull qwen3-vl    # LLM + Vision — chat, OCR, SOAP (~1.8 GB)
+edgescribe pull kokoro      # TTS — text-to-speech (~330 MB)
 ```
 
-### 3. Transcribe
+All models download from public HuggingFace repos — no account or token needed.
+
+### 3. Use
 
 ```bash
-# Live microphone transcription
-edgescribe run --live
+# Start the web UI + REST API
+edgescribe serve
 
-# Transcribe a WAV file
-edgescribe run meeting.wav
-
-# Save transcript to file
-edgescribe run meeting.wav -o transcript.txt
+# Or use CLI directly
+edgescribe run --live                    # Live transcription
+edgescribe chat "What is hypertension?"  # LLM chat
+edgescribe vision rx.jpg --ocr           # OCR a prescription
+edgescribe speak "Patient is stable."    # Text-to-speech
+edgescribe process --soap transcript.txt # Generate SOAP notes
 ```
+
+Open `http://localhost:8080` in your browser for the web UI.
+
+---
 
 ## Commands
 
@@ -92,6 +102,7 @@ edgescribe run meeting.wav -o transcript.txt
 | Command | Description |
 |---------|-------------|
 | `edgescribe pull <model>` | Download a model from HuggingFace |
+| `edgescribe pull <model> --token <hf_token>` | Download gated/private model with auth |
 | `edgescribe list` | List available and downloaded models |
 | `edgescribe remove <model>` | Delete a downloaded model |
 
@@ -247,18 +258,24 @@ edgescribe speak --voices
 
 ## Models
 
-| Model | Type | Size | Description |
-|-------|------|------|-------------|
-| `nemotron` | ASR | ~670 MB | Real-time English speech-to-text (Parakeet TDT 0.6B, ONNX) |
-| `qwen3-vl` | VLM | ~1.8 GB | Vision + language — OCR, SOAP notes (Qwen3-VL-2B Q4_K_M + mmproj, GGUF) |
-| `kokoro` | TTS | ~310 MB | Text-to-speech with natural voices (Kokoro 82M FP32, ONNX) |
-| | | **~2.8 GB** | **Total for full AI suite** |
+| Model | Type | Size | Format | HuggingFace Repo |
+|-------|------|------|--------|-----------------|
+| `nemotron` | ASR | ~670 MB | ONNX | jiafatom/nemotron-cpu-int4 |
+| `qwen3-vl` | LLM+Vision | ~1.8 GB | GGUF (Q4_K_M + mmproj) | Qwen/Qwen3-VL-2B-Instruct-GGUF |
+| `kokoro` | TTS | ~330 MB | ONNX (FP32) | onnx-community/Kokoro-82M-ONNX |
+| | | **~2.8 GB** | | **Total for full AI suite** |
 
-Models are downloaded from HuggingFace and cached locally at:
-- **Windows**: `%LOCALAPPDATA%\EDGESCRIBE\models\`
-- **macOS/Linux**: `~/.EDGESCRIBE/models/`
+Available TTS voices: `af` (default female), `af_bella`, `af_sky`, `am_adam`
 
-Override with `EDGESCRIBE_MODEL_DIR` environment variable.
+Models are downloaded from public HuggingFace repos — no account needed.
+For gated/private models: `edgescribe pull <model> --token hf_xxxxx`
+
+### Model Cache
+
+| Platform | Path | Override |
+|----------|------|---------|
+| Windows | `%LOCALAPPDATA%\EDGESCRIBE\models\` | `EDGESCRIBE_MODEL_DIR` |
+| macOS/Linux | `~/.EDGESCRIBE/models/` | `EDGESCRIBE_MODEL_DIR` |
 
 ### Using a Custom Model
 
@@ -467,39 +484,36 @@ src/
 
 ## Roadmap
 
-### v1.0 — Core AI Suite (Current)
+### v1.0 — Core AI Suite ✅ (Current)
 
-Ship the foundation: on-device ASR + LLM + Vision + TTS in a single binary, zero cloud dependencies.
-
-- [x] CLI tool with `pull` / `run` / `list` commands
+- [x] CLI tool with `pull` / `run` / `list` / `remove` commands
 - [x] Live microphone transcription
 - [x] WAV file transcription
 - [x] Cross-platform builds (Windows x64, macOS ARM64)
 - [x] LLM chat (`edgescribe chat`) with multi-turn support
 - [x] Vision & OCR (`edgescribe vision`)
 - [x] SOAP notes / summarize / fix terms (`edgescribe process`)
-- [x] Text-to-speech (`edgescribe speak`)
+- [x] Text-to-speech (`edgescribe speak`) with espeak-ng phonemizer
 - [x] Windows installer (Inno Setup, auto-adds to PATH)
-- [x] Proper G2P phonemizer for TTS (espeak-ng or misaki ONNX)
-- [x] Local REST API server (`edgescribe serve`)
-- [x] GPU acceleration — Vulkan (Windows) and Metal (macOS), auto-detect with CPU fallback
+- [x] Local REST API server (`edgescribe serve`) + built-in Web UI
+- [x] GPU acceleration — Vulkan (NVIDIA/AMD/Intel) + Metal (macOS), auto-detect with CPU fallback
+- [x] KV cache reuse for multi-turn chat (prefix matching, only new tokens processed)
+- [x] Smart memory management — mmap for LLM, lazy load/unload for ASR/TTS
+- [x] Auto GPU/CPU layer splitting (llama.cpp handles VRAM overflow)
+- [x] VRAM-aware mmproj loading (auto CPU fallback for small GPUs)
 - [x] SQLite persistent memory — auto-save chat + process history
-- [x] `edgescribe history` — list, show, search, delete past sessions
+- [x] HuggingFace token support for gated/private model downloads
+- [x] Performance stats (TTFT, tok/s, cache hits)
 
-### v1.1 — Transcription Quality + Performance
+### v1.1 — Quality + Polish
 
-Improve ASR output quality and optimize multi-turn chat performance.
-
-- [ ] KV cache reuse for multi-turn chat (skip re-processing cached tokens)
-- [ ] DirectML (Windows) / CoreML (macOS) for ASR/TTS acceleration
 - [ ] Speaker diarization (who said what)
 - [ ] Word-level timestamps
 - [ ] SRT/VTT subtitle export
-- [ ] Web dashboard UI
+- [ ] Streaming SSE for chat API (real-time token streaming to frontend)
+- [ ] Multiple ASR languages
 
 ### v1.2 — Knowledge Base (RAG)
-
-Let users ingest their own documents (research reports, clinical guidelines, protocols) and query against them. LLM answers grounded in user's content.
 
 - [ ] Document ingestion with text chunking (TXT, CSV, MD)
 - [ ] FTS5 search on knowledge base chunks
@@ -507,25 +521,33 @@ Let users ingest their own documents (research reports, clinical guidelines, pro
 - [ ] `edgescribe kb` CLI commands (add, list, search, remove)
 - [ ] REST API endpoints for KB (`/v1/kb/*`)
 
-### v1.3 — Semantic Search
+### v1.3 — Fine-Tuned Models + SaaS
 
-Add a dedicated embedding model for similarity-based retrieval, improving search quality beyond keyword matching.
-
-- [ ] `all-MiniLM-L6-v2` ONNX embedding model (~80 MB, 384-dim vectors)
-- [ ] Brute-force cosine similarity search in C++ (<1ms for 10K entries)
-- [ ] Embed chunks on ingestion, store as BLOBs in SQLite
-- [ ] Hybrid search (FTS5 keywords + cosine similarity)
-- [ ] `edgescribe pull embeddings` to download model
+- [ ] Specialty LoRA adapters (cardiology, dermatology, orthopedics)
+- [ ] Fine-tuned SOAP model (distilled from GPT-4 quality data)
+- [ ] Embedding model for semantic search (`all-MiniLM-L6-v2`)
+- [ ] Cloud SaaS tier with agent workflows
 
 ### Future
 
-- [ ] CUDA acceleration (NVIDIA-specific optimized build)
-- [ ] Multiple languages
-- [ ] Package managers (winget, brew, apt)
-- [ ] Configurable context window (`--context 8192` / `--context 32768`)
-- [ ] KV cache quantization (Q8_0) for lower memory usage
+- [ ] CUDA-specific optimized build
 - [ ] PDF/DOCX ingestion for knowledge base
-- [ ] Specialty LoRA adapters (cardiology, dermatology, psychiatry, etc.)
+- [ ] Mobile deployment (iOS/Android)
+- [ ] Package managers (winget, brew, apt)
+- [ ] Configurable context window (`--context 8192`)
+- [ ] NVIDIA Jetson / Raspberry Pi deployment
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [llama-cpp-integration.md](doc/llama-cpp-integration.md) | Build guide, CMake, GPU backends, model management |
+| [RAM-memory-management.md](doc/RAM-memory-management.md) | mmap, lazy loading, idle unloading, memory budgets |
+| [deployment.md](doc/deployment.md) | Platform deployment, Jetson, Docker, systemd |
+| [kv-cache-optimization.md](doc/kv-cache-optimization.md) | KV cache prefix matching for multi-turn chat |
+| [ort-llama-cpp.md](doc/ort-llama-cpp.md) | ONNX Runtime vs llama.cpp comparison |
+| [GTM.md](doc/GTM.md) | Go-to-market strategy |
+| [demo.md](doc/demo.md) | 5-minute demo script |
 
 ## License
 
@@ -533,11 +555,12 @@ MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) — LLM and Vision inference (GGUF)
+- [llama.cpp](https://github.com/ggerganov/llama.cpp) — LLM and Vision inference (GGUF, Vulkan/Metal)
 - [ONNX Runtime GenAI](https://github.com/microsoft/onnxruntime-genai) — ASR inference
 - [ONNX Runtime](https://github.com/microsoft/onnxruntime) — TTS inference
+- [cpp-httplib](https://github.com/yhirose/cpp-httplib) — HTTP server
 - [miniaudio](https://github.com/mackron/miniaudio) — Cross-platform audio
+- [espeak-ng](https://github.com/espeak-ng/espeak-ng) — Text-to-phoneme conversion
 - [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) — ASR model
 - [Qwen3-VL](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct) — Vision + language model
 - [Kokoro TTS](https://github.com/thewh1teagle/kokoro-onnx) — Text-to-speech model
-- [misaki G2P](https://huggingface.co/blog/hexgrad/g2p) — Grapheme-to-phoneme (future)
