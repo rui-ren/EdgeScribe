@@ -98,10 +98,8 @@ jobs:
           pip install requests
           cd genai_src
           python build.py --config Release --parallel --skip_tests --skip_examples --skip_wheel
-          # Copy outputs to clean install prefix
-          New-Item -ItemType Directory -Path "${{ github.workspace }}/genai_install" -Force
-          Copy-Item -Recurse src "${{ github.workspace }}/genai_install/src"
-          Copy-Item -Recurse build "${{ github.workspace }}/genai_install/build"
+          # Copy entire source tree as the install (CMakeLists.txt auto-discovers paths)
+          Copy-Item -Recurse "${{ github.workspace }}/genai_src" "${{ github.workspace }}/genai_install"
 
       # ── Configure & Build EDGESCRIBE ─────────────────────────────────────
       - name: Configure CMake
@@ -181,9 +179,8 @@ jobs:
           cd genai_src
           python3 build.py --config Release --parallel --skip_tests --skip_examples --skip_wheel \
             --cmake_extra_defines CMAKE_OSX_ARCHITECTURES=arm64
-          mkdir -p "${{ github.workspace }}/genai_install"
-          cp -r src "${{ github.workspace }}/genai_install/src"
-          cp -r build "${{ github.workspace }}/genai_install/build"
+          # Copy entire source tree as the install (CMakeLists.txt auto-discovers paths)
+          cp -r "${{ github.workspace }}/genai_src" "${{ github.workspace }}/genai_install"
 
       # ── Configure & Build EDGESCRIBE ─────────────────────────────────────
       - name: Configure CMake
