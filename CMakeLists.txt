@@ -88,6 +88,7 @@ set(EDGESCRIBE_SOURCES
     src/vision/vision_engine.cpp
     src/tts/tts_engine.cpp
     src/tts/phonemizer.cpp
+    src/asr/diarizer.cpp
     src/server/api_server.cpp
 )
 

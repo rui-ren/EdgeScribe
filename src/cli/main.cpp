@@ -14,6 +14,7 @@
 #include "core/model_manager.h"
 #include "core/memory_store.h"
 #include "asr/transcriber.h"
+#include "asr/diarizer.h"
 #include "llm/llm_engine.h"
 #include "vision/vision_engine.h"
 #include "tts/tts_engine.h"
@@ -64,6 +65,7 @@ static void PrintUsage() {
   std::cout << "Speech-to-Text (ASR):" << std::endl;
   std::cout << "  edgescribe run --live [options]       Live microphone transcription" << std::endl;
   std::cout << "  edgescribe run <file.wav> [options]   Transcribe a WAV file" << std::endl;
+  std::cout << "  edgescribe run <file.wav> --diarize   Transcribe with speaker labels" << std::endl;
   std::cout << "  edgescribe devices                    List audio input devices" << std::endl;
   std::cout << std::endl;
   std::cout << "Vision & Language:" << std::endl;
@@ -879,12 +881,15 @@ int main(int argc, char* argv[]) {
     std::string srt_file;
     std::string vtt_file;
     bool live_mode = false;
+    bool diarize = false;
 
     for (int i = 2; i < argc; i++) {
       std::string arg = argv[i];
 
       if (arg == "--live") {
         live_mode = true;
+      } else if (arg == "--diarize") {
+        diarize = true;
       } else if (arg == "--device" || arg == "-d") {
         if (i + 1 < argc) {
           device = argv[++i];
@@ -941,7 +946,60 @@ int main(int argc, char* argv[]) {
     if (live_mode) {
       return CmdRunLive(model_path, output_file, device);
     } else if (!audio_file.empty()) {
-      return CmdRunFile(audio_file, model_path, output_file, device, srt_file, vtt_file);
+      int rc = CmdRunFile(audio_file, model_path, output_file, device, srt_file, vtt_file);
+
+      // Post-process with diarization if requested
+      if (rc == 0 && diarize) {
+        try {
+          std::string diar_model_path = manager.GetModelPath("ecapa-tdnn");
+          auto audio = LoadWavFile(audio_file);
+
+          std::cout << "\nRunning speaker diarization..." << std::endl;
+          Transcriber transcriber(model_path, device);
+
+          constexpr size_t kDiarChunkSize = 8960;
+          for (size_t i = 0; i < audio.samples.size(); i += kDiarChunkSize) {
+            size_t remaining = std::min(kDiarChunkSize, audio.samples.size() - i);
+            transcriber.ProcessChunk(audio.samples.data() + i, remaining);
+          }
+          transcriber.Flush();
+
+          auto words = transcriber.GetTimestampedWords();
+
+          Diarizer diarizer(diar_model_path + "/model.onnx", device);
+          auto segments = diarizer.Diarize(
+              audio.samples.data(), audio.samples.size(), 16000, words);
+
+          std::cout << std::string(60, '-') << std::endl;
+          std::cout << FormatDiarizedTranscript(segments);
+          std::cout << std::string(60, '-') << std::endl;
+
+          int num_speakers = 0;
+          for (const auto& seg : segments) {
+            num_speakers = std::max(num_speakers, seg.speaker_id + 1);
+          }
+          std::cout << "  Speakers detected: " << num_speakers << std::endl;
+
+          if (!output_file.empty()) {
+            std::string diar_file = output_file;
+            auto dot = diar_file.rfind('.');
+            if (dot != std::string::npos) {
+              diar_file = diar_file.substr(0, dot) + ".diarized" + diar_file.substr(dot);
+            } else {
+              diar_file += ".diarized.txt";
+            }
+            std::ofstream ofs(diar_file);
+            if (ofs.is_open()) {
+              ofs << FormatDiarizedTranscript(segments);
+              std::cout << "  Diarized output saved to: " << diar_file << std::endl;
+            }
+          }
+        } catch (const std::exception& e) {
+          std::cerr << "Diarization error: " << e.what() << std::endl;
+        }
+      }
+
+      return rc;
     } else {
       std::cerr << "Usage: edgescribe run --live" << std::endl;
       std::cerr << "       edgescribe run <file.wav>" << std::endl;

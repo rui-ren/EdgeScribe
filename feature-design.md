@@ -512,8 +512,8 @@ Model (~600 MB) is downloaded separately on first run. Install size is small.
 | Feature | Priority | Notes |
 |---------|----------|-------|
 | **Proper G2P for TTS** | **High** | espeak-ng or misaki ONNX for correct phoneme tokenization |
-| Speaker diarization | Medium | "Speaker 1: ... Speaker 2: ..." |
-| Timestamps | Medium | Word-level timestamps for subtitle generation |
+| Speaker diarization | Medium | ✅ Implemented — ECAPA-TDNN ONNX + HAC clustering |
+| Timestamps | Medium | ✅ Implemented — word-level timestamps for subtitle generation |
 | Multiple languages | Medium | ASR models for other languages |
 | GPU acceleration | Low | CUDA/DirectML/Metal via ORT execution providers |
 | SRT/VTT export | Medium | Subtitle file formats |

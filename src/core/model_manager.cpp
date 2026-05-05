@@ -71,6 +71,17 @@ static const struct {
         {"model.onnx", "voices.bin", "config.json"},
         3,
     },
+    {
+        "ecapa-tdnn",
+        "ECAPA-TDNN Speaker Embedding",
+        "EDGESCRIBE/ecapa-tdnn-onnx",
+        "Speaker diarization. 192-dim embeddings. CPU optimized.",
+        "diarization",
+        "model.onnx",
+        15,
+        {"model.onnx"},
+        1,
+    },
 };
 
 static constexpr size_t kModelCount = sizeof(kModelManifest) / sizeof(kModelManifest[0]);
